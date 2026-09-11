@@ -14,7 +14,7 @@ export function DataWidgetScaleControl({ shapeId, scale = 1 }: { shapeId: TLShap
 		setError('')
 		if (value / 100 === scale) return
 		editor.markHistoryStoppingPoint('change widget content scale')
-		if (shape.type === 'bas-table' || shape.type === 'bas-trend') editor.updateShape({ id: shape.id, type: shape.type, props: { contentScale: value / 100 } })
+		if (shape.type === 'bas-table' || shape.type === 'bas-trend' || shape.type === 'bas-web-view') editor.updateShape({ id: shape.id, type: shape.type, props: { contentScale: value / 100 } })
 	}
 	return <>
 		<label className="binding-field"><span>Content scale (%)</span><input type="number" min={25} max={400} step="any" value={draft} disabled={disabled} aria-invalid={Boolean(error)} onChange={(event) => { setDraft(event.target.value); setError('') }} onBlur={save} onKeyDown={(event) => {

@@ -8,6 +8,8 @@ import { DataWidgetScaleControl } from './DataWidgetScaleControl'
 import { BehaviorInspector } from './BehaviorInspector'
 import { ShapeIdentityPanel } from './ShapeIdentityPanel'
 import { useDataShapeDialog } from './DataShapeDialog'
+import { WebViewSettings } from './WebViewSettings'
+import { WEB_VIEW_TYPE } from './WebViewShape'
 import { BAS_TABLE_SHAPE_TYPE, BAS_TREND_SHAPE_TYPE, type BasTableShape, type BasTrendShape } from './DataWidgetShapes'
 
 export type DataShape = BasTableShape | BasTrendShape
@@ -20,6 +22,7 @@ export function DataShapeStylePanel(props: TLUiStylePanelProps) {
 		{shape && <ShapeIdentityPanel key={`identity:${shape.id}`} shape={shape} />}
 		{shape ? <details className="bas-appearance-section" open><summary>Appearance</summary><DefaultStylePanelContent /></details> : <DefaultStylePanelContent />}
 		{isData && <DataShapeSettings key={`data:${shape.id}`} shape={shape} />}
+		{shape?.type === WEB_VIEW_TYPE && <WebViewSettings key={shape.id} shape={shape} />}
 		{shape && <BehaviorInspector key={`behaviors:${shape.id}`} shape={shape} />}
 	</DefaultStylePanel>
 }

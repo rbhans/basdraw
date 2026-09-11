@@ -5,6 +5,7 @@ import path from 'node:path'
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)))
 const vite = path.join(root, 'node_modules', '.bin', 'vite')
 const children = [
+	spawn(process.execPath, [path.join(root, 'scripts', 'vector-import-server.mjs')], { cwd: root, stdio: 'inherit' }),
 	spawn(process.execPath, [path.join(root, 'scripts', 'baskstream-bridge.mjs')], {
 		cwd: root,
 		stdio: 'inherit',
@@ -33,4 +34,3 @@ for (const child of children) {
 		else if (code) process.exitCode = code
 	})
 }
-

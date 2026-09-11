@@ -1,10 +1,11 @@
-import { forwardRef, type CSSProperties } from 'react'
-import { DefaultShapeWrapper, type TLShapeWrapperProps, useEditor } from 'tldraw'
+import { forwardRef, useRef, type ReactNode } from 'react'
+import { DefaultShapeWrapper, type TLShapeWrapperProps, type TLShape, useEditor } from 'tldraw'
+import type { ShapeBinding, PointSnapshot } from './types'
 import { useBasRuntime } from './BasRuntimeContext'
 import { bindingsForRenderedShape, pageVectorInShapeSpace, transformOriginForBindings } from './bindingScope'
 import { getRuntimeShapePresentation } from './runtimeMapping'
-import { SynchronizedHtmlMotion } from './SynchronizedMotion'
-import { SynchronizedHtmlSpin } from './SynchronizedSpin'
+import { SynchronizedHtmlMotion, SynchronizedHtmlSpin } from './RuntimeMotion'
+import { useRuntimeValues } from './runtimeAnimationHooks'
 
 export const RuntimeShapeWrapper = forwardRef(function RuntimeShapeWrapper(
 	{ children, shape, isBackground, ...props }: TLShapeWrapperProps,
@@ -13,39 +14,35 @@ export const RuntimeShapeWrapper = forwardRef(function RuntimeShapeWrapper(
 	const editor = useEditor()
 	const { document, snapshots } = useBasRuntime()
 	const bindings = bindingsForRenderedShape(editor, shape, document.bindings)
+	return <DefaultShapeWrapper ref={ref} shape={shape} isBackground={isBackground} {...props}>
+		{bindings.length ? <RuntimeShapeContent shape={shape} bindings={bindings} snapshots={snapshots}>{children}</RuntimeShapeContent> : children}
+	</DefaultShapeWrapper>
+})
+
+function RuntimeShapeContent({ shape, bindings, snapshots, children }: { shape: TLShape; bindings: ShapeBinding[]; snapshots: Record<string, PointSnapshot>; children: ReactNode }) {
+	const editor = useEditor()
 	const presentation = getRuntimeShapePresentation(bindings, snapshots)
 	const geometry = editor.getShapeGeometry(shape)
 	const transformOrigin = transformOriginForBindings(editor, shape, bindings, geometry.bounds.center)
 	const scaleOrigin = transformOriginForBindings(editor, shape, bindings, geometry.bounds.center, 'scale')
-	const translation = pageVectorInShapeSpace(editor, shape, presentation.translation)
 	const motion = presentation.motion
-		? { ...pageVectorInShapeSpace(editor, shape, presentation.motion), secondsPerCycle: presentation.motion.secondsPerCycle }
+		? { ...presentation.motion, ...pageVectorInShapeSpace(editor, shape, presentation.motion) }
 		: undefined
-	const transforms: string[] = []
-	if (translation.x !== 0 || translation.y !== 0) transforms.push(`translate(${translation.x}px, ${translation.y}px)`)
-	if (presentation.rotation != null) transforms.push(`rotate(${presentation.rotation}deg)`)
-	const presentationStyle: CSSProperties = {
-		height: '100%',
-		width: '100%',
-		opacity: presentation.opacity,
-		visibility: presentation.visible === false ? 'hidden' : undefined,
-	}
-	const transformStyle: CSSProperties = {
-		height: '100%',
-		width: '100%',
-		transform: transforms.length ? transforms.join(' ') : undefined,
-		transformOrigin: `${transformOrigin.x}px ${transformOrigin.y}px`,
-	}
+	const content = useRef<HTMLDivElement>(null), transform = useRef<HTMLDivElement>(null), scaled = useRef<HTMLDivElement>(null)
+	useRuntimeValues({ x: presentation.translation?.x ?? 0, y: presentation.translation?.y ?? 0, rotation: presentation.rotation ?? 0, scale: presentation.scale ?? 1, opacity: presentation.opacity ?? 1 }, values => {
+		const translation = pageVectorInShapeSpace(editor, shape, { x: values.x, y: values.y })
+		if (content.current) content.current.style.opacity = String(values.opacity)
+		if (transform.current) transform.current.style.transform = `translate(${translation.x}px, ${translation.y}px) rotate(${values.rotation}deg)`
+		if (scaled.current) scaled.current.style.transform = `scale(${values.scale})`
+	})
 
 	return (
-		<DefaultShapeWrapper ref={ref} shape={shape} isBackground={isBackground} {...props}>
-			<div className="runtime-shape-content" style={presentationStyle}>
-				<SynchronizedHtmlMotion motion={motion} motions={presentation.motions?.map((item) => ({ ...pageVectorInShapeSpace(editor, shape, item), secondsPerCycle: item.secondsPerCycle }))}>
-					<div className="runtime-shape-transform" style={transformStyle}>
-						<SynchronizedHtmlSpin center={transformOrigin} spin={presentation.spin}><div style={{ width: '100%', height: '100%', transform: presentation.scale != null ? `scale(${presentation.scale})` : undefined, transformOrigin: `${scaleOrigin.x}px ${scaleOrigin.y}px` }}>{children}</div></SynchronizedHtmlSpin>
+			<div ref={content} className="runtime-shape-content" style={{ visibility: presentation.visible === false ? 'hidden' : undefined }}>
+				<SynchronizedHtmlMotion motion={motion} motions={presentation.motions?.map((item) => ({ ...item, ...pageVectorInShapeSpace(editor, shape, item) }))}>
+					<div ref={transform} className="runtime-shape-transform" style={{ transformOrigin: `${transformOrigin.x}px ${transformOrigin.y}px` }}>
+						<SynchronizedHtmlSpin center={transformOrigin} spin={presentation.spin}><div ref={scaled} style={{ width: '100%', height: '100%', transformOrigin: `${scaleOrigin.x}px ${scaleOrigin.y}px` }}>{children}</div></SynchronizedHtmlSpin>
 					</div>
 				</SynchronizedHtmlMotion>
 			</div>
-		</DefaultShapeWrapper>
 	)
-})
+}

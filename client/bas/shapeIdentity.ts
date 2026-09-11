@@ -11,6 +11,7 @@ export function shapeName(shape: TLShape): string {
 }
 
 function shapeKind(shape: TLShape) {
+	if (shape.type === 'bas-web-view') return 'Web view'
 	if (shape.type === 'geo') {
 		const props = shape.props as { geo: string; w: number; h: number }
 		if (props.geo === 'rectangle' && Math.abs(props.w - props.h) < 1) return 'Square'

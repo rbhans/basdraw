@@ -37,6 +37,7 @@ import {
 	type BasTrendShape,
 } from './bas/DataWidgetShapes'
 import { DataShapeStylePanel } from './bas/DataShapeStylePanel'
+import { WebViewShapeUtil } from './bas/WebViewShape'
 
 import { DataToolbar } from './bas/DataToolbar'
 import { PointDragProvider, CanvasPointDrop } from './bas/PointDrag'
@@ -51,8 +52,9 @@ DefaultSizeStyle.setDefaultValue('s')
 // Custom tools for picking context items
 const tools = [TargetShapeTool, TargetAreaTool]
 const overlayUtils = [AgentHighlightOverlayUtil]
+const shapeUtils = [...dataWidgetShapeUtils, WebViewShapeUtil]
 const overrides: TLUiOverrides = {
-	translations: { en: { 'tool.bas-table': 'Equipment table', 'tool.bas-trend': 'Trend chart' } },
+	translations: { en: { 'tool.bas-table': 'Equipment table', 'tool.bas-trend': 'Trend chart', 'tool.bas-web-view': 'Web View', 'tool.bas-import-pdf': 'Import vector PDF' } },
 	tools: (editor, tools) => {
 		return {
 			...tools,
@@ -181,7 +183,7 @@ function App() {
 							<Tldraw
 								licenseKey={import.meta.env.VITE_TLDRAW_LICENSE_KEY}
 								persistenceKey="bas-whiteboard-canvas-v1"
-								shapeUtils={dataWidgetShapeUtils}
+								shapeUtils={shapeUtils}
 								tools={tools}
 								overlayUtils={overlayUtils}
 								overrides={overrides}

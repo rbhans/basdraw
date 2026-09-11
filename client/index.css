@@ -1340,7 +1340,6 @@ button:disabled {
 
 .runtime-level-fill .runtime-level-rect {
 	opacity: .68;
-	transition: transform 180ms cubic-bezier(.77, 0, .175, 1);
 }
 
 .runtime-fill[data-state='inactive'] path {
@@ -1399,12 +1398,6 @@ button:disabled {
 
 .runtime-label[data-state='stale'] {
 	background: rgb(92 76 128 / 94%);
-}
-
-@media (prefers-reduced-motion: reduce) {
-	.runtime-level-fill .runtime-level-rect {
-		transition: none;
-	}
 }
 
 /* Native canvas data shapes */
@@ -2603,3 +2596,19 @@ button.prompt-tag span {
 	.data-setup-selection { grid-template-columns: 1fr; }
 	.data-setup-matches { max-height: 160px; }
 }
+/* Web pages only receive input while explicitly editing the Web View. */
+.bas-web-view { display: flex; flex-direction: column; overflow: hidden; border: 1px solid var(--tl-color-divider); border-radius: 8px; background: var(--tl-color-panel); color: var(--tl-color-text); pointer-events: none; }
+.bas-web-view-bar { display: flex; align-items: center; gap: 12px; height: 36px; flex-shrink: 0; padding: 0 12px; border-bottom: 1px solid var(--tl-color-divider); font-family: var(--tl-font-sans); font-size: 12px; }
+.bas-web-view-bar strong { min-width: 0; flex: 1; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.bas-web-view-bar span { color: var(--tl-color-text-3); overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.bas-web-view-bar button { flex-shrink: 0; border: 0; border-radius: 4px; padding: 4px 8px; color: inherit; background: var(--tl-color-muted-1); font: inherit; cursor: pointer; }
+.bas-web-view-bar button:hover { background: var(--tl-color-muted-2); }
+.bas-web-view-viewport { position: relative; flex: 1; min-height: 0; overflow: hidden; }
+.bas-web-view iframe { position: absolute; top: 0; left: 0; display: block; border: 0; background: white; }
+.bas-web-view-empty { padding: 24px; font: 14px var(--tl-font-sans); }
+.bas-pdf-dialog { display: flex; flex-direction: column; min-height: 0; }
+.bas-pdf-dialog .tlui-dialog__body { min-height: 0; flex: 1; }
+.bas-pdf-dialog .tlui-dialog__header, .bas-pdf-dialog .tlui-dialog__footer { flex-shrink: 0; }
+.bas-pdf-preview { display: block; flex-shrink: 0; width: 100%; height: 260px; object-fit: contain; background: white; border: 1px solid var(--tl-color-divider); border-radius: var(--tl-radius-2); }
+.bas-pdf-dialog input[type="file"] { max-width: 100%; font: inherit; }
+.bas-pdf-dialog input[type="number"] { width: 80px; font: inherit; color: inherit; background: var(--tl-color-panel); border: 1px solid var(--tl-color-divider); border-radius: var(--tl-radius-2); padding: 6px; }

@@ -26,6 +26,7 @@ function Fixture() {
 	const [editor, setEditor] = useState<Editor | null>(null)
 	const [run, setRun] = useState(false)
 	const [temperature, setTemperature] = useState(72.4)
+	const [proof, setProof] = useState('')
 	const workspace = useBasWorkspace(editor)
 	const snapshots: Record<string, PointSnapshot> = {
 		'fixture:temperature': { point: 'fixture:temperature', value: temperature, displayValue: `${temperature} °F`, status: 'ok' },
@@ -42,6 +43,25 @@ function Fixture() {
 			<div style={{ height: 60, padding: 8 }}>Isolated behavior QA · synthetic values · no saved drawing or station connection
 				<label> Temperature <input aria-label="Fixture temperature" type="number" value={temperature} onChange={(event) => setTemperature(Number(event.target.value))} /></label>
 				<button onClick={() => setRun((value) => !value)}>{run ? 'Stop fixture fan' : 'Start fixture fan'}</button>
+				<button onClick={() => {
+					if (!editor) return
+					const effects: Pick<ShapeBinding, 'runtimeProperty' | 'options'>[] = [
+						{ runtimeProperty: 'rotation', options: { kind: 'rotation', mode: 'spin', secondsPerTurn: 2, direction: 'clockwise', restAngle: 0 } },
+						{ runtimeProperty: 'movement', options: { kind: 'movement', mode: 'travel', axis: 'x', direction: 'positive', distance: 180, secondsPerCycle: 3 } },
+						{ runtimeProperty: 'levelFill', options: { kind: 'levelFill', direction: 'up', color: '#34a853' } },
+					]
+					for (const effect of effects) dispatchShapeBindingAction(editor, { type: 'create_binding', binding: {
+						id: `qa-${effect.runtimeProperty}`, shapeId, stationAlias: 'fixture', pointReference: effect.runtimeProperty === 'levelFill' ? 'fixture:temperature' : 'fixture:run', pointLabel: 'Fixture', mapping: { kind: 'auto' }, ...effect,
+					} })
+					setRun(true)
+				}}>Add motion fixture</button>
+				<button onClick={async () => {
+					if (!editor) return
+					const before = JSON.stringify(editor.store.serialize('document'))
+					setProof('Checking…')
+					await new Promise(resolve => setTimeout(resolve, 700))
+					setProof(before === JSON.stringify(editor.store.serialize('document')) ? 'PASS: animation leaves document unchanged' : 'FAIL: document changed')
+				}}>Check saved geometry</button><output>{proof}</output>
 			</div>
 			<div style={{ position: 'absolute', inset: '60px 0 0' }}><Tldraw components={components} onMount={(mounted) => {
 				mounted.updateDocumentSettings({ meta: { basBindingsVersion: 1 } })

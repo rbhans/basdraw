@@ -1,7 +1,9 @@
 import type { Editor, TLShape } from 'tldraw'
+import { useRef, type ReactNode } from 'react'
+import { useRuntimeValues } from './runtimeAnimationHooks'
 import { bindingsForRenderedShape } from './bindingScope'
 import { getRuntimeShapePresentation } from './runtimeMapping'
-import { SynchronizedHtmlMotion } from './SynchronizedMotion'
+import { SynchronizedHtmlMotion } from './RuntimeMotion'
 import { formatSnapshot, labelColorStyle, labelFontStyle, labelPositionStyle, labelStatusTextColor, snapshotState } from './labelPresentation'
 import type { LabelPlacement, PointSnapshot, ShapeBinding } from './types'
 
@@ -29,11 +31,12 @@ export function RuntimeValueLabels({ editor, shapes, bindings, snapshots, zoom }
 		const presentation = getRuntimeShapePresentation(bindingsForRenderedShape(editor, shape, bindings), snapshots)
 		if (presentation.visible === false) return null
 		const topLeft = editor.pageToViewport(bounds)
-		const style = labelPositionStyle(topLeft.x, topLeft.y, bounds.w * zoom, bounds.h * zoom, stack.placement, 0, presentation.opacity)
+		const style = labelPositionStyle(topLeft.x, topLeft.y, bounds.w * zoom, bounds.h * zoom, stack.placement, 0, 1)
 		const visible = stack.labels.filter((binding) => snapshots[binding.pointReference])
 		return <div key={key} className="runtime-label-anchor" style={style}>
+			<LabelTranslation x={presentation.translation?.x ?? 0} y={presentation.translation?.y ?? 0} opacity={presentation.opacity ?? 1} zoom={zoom}>
 			<SynchronizedHtmlMotion motion={presentation.motion} motions={presentation.motions?.map((motion) => ({ ...motion, x: motion.x * zoom, y: motion.y * zoom }))}>
-				<div className="runtime-label-stack" style={{ display: 'flex', flexDirection: stack.placement === 'top' ? 'column-reverse' : 'column', alignItems: stack.placement === 'left' ? 'flex-end' : stack.placement === 'right' ? 'flex-start' : 'center', transform: `translate(${(presentation.translation?.x || 0) * zoom}px, ${(presentation.translation?.y || 0) * zoom}px)` }}>
+				<div className="runtime-label-stack" style={{ display: 'flex', flexDirection: stack.placement === 'top' ? 'column-reverse' : 'column', alignItems: stack.placement === 'left' ? 'flex-end' : stack.placement === 'right' ? 'flex-start' : 'center' }}>
 					{visible.map((binding, index) => {
 						const snapshot = snapshots[binding.pointReference]
 						const options = binding.options?.kind === 'label' ? binding.options : { kind: 'label' as const, placement: 'bottom' as const, gap: 5 }
@@ -50,6 +53,17 @@ export function RuntimeValueLabels({ editor, shapes, bindings, snapshots, zoom }
 					})}
 				</div>
 			</SynchronizedHtmlMotion>
+			</LabelTranslation>
 		</div>
 	})}</>
+}
+
+function LabelTranslation({ x, y, opacity, zoom, children }: { x: number; y: number; opacity: number; zoom: number; children: ReactNode }) {
+	const ref = useRef<HTMLDivElement>(null)
+	useRuntimeValues({ x, y, opacity }, values => {
+		if (!ref.current) return
+		ref.current.style.transform = `translate(${values.x * zoom}px, ${values.y * zoom}px)`
+		ref.current.style.opacity = String(values.opacity)
+	})
+	return <div ref={ref}>{children}</div>
 }

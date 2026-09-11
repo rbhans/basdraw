@@ -39,7 +39,7 @@ The pivot is an optional, validated rotation setting rather than a new animation
 | Rotation and scale shared an origin chosen from either effect | Separate rotation and scale origins | Changing a hinge must not change scale behavior. |
 | Rotation assumed the center | Presets and normalized custom coordinates in a dedicated control | Supports resizing and keeps the main editor from absorbing the whole control implementation. |
 
-Current strengths verified in source: shape metadata is the saved authority; live values stay outside the drawing; metadata reads have a migration/validation boundary; runtime effects do not write animation frames into native history; continuous spin uses cancellable Web Animations and respects the editor's motion preference. Native ShapeUtil classes remain the route for new shape types, as described in the [tldraw shape SDK documentation](https://tldraw.dev/docs/shapes).
+Current strengths verified in source: shape metadata is the saved authority; live values stay outside the drawing; metadata reads have a migration/validation boundary; runtime effects do not write animation frames into native history. A shared controller now advances continuous bindings and numeric transitions from the editor tick clock and respects its motion preference. Native ShapeUtil classes remain the route for new shape types, as described in the [tldraw shape SDK documentation](https://tldraw.dev/docs/shapes).
 
 This is a sound local foundation, not a zero-risk or scale-tested platform. Before adding a larger set of features:
 
@@ -128,7 +128,7 @@ These are recorded limitations and next steps, not completed features.
 | 3 | Better table mapping and comparison | Select several similar units, choose columns once, confirm each match, then sort or filter equipment by value or status. | Medium; build on the mapping preview rather than relying only on folder names. |
 | 4 | Trend comparison tools | Compare command versus feedback or temperature versus setpoint with units, gaps, refresh and a shared time window. | Medium; history completeness should come first. |
 | 5 | Reusable symbol assemblies | Save a configured fan, pump, damper or AHU group with named point roles. Insert it and connect those roles to equipment. | Medium to large; naturally follows templates. |
-| Later | Vector PDF control drawings | Import vector pages, manually promote symbol paths into groups, then bind those groups. | Large; already scoped in the roadmap, with raster/scanned PDFs excluded. |
+| Initial slice implemented | Vector PDF control drawings | Import a vector page as native SVG pieces, manually group symbols, then bind those groups. | Local Poppler service; later work includes compound-path editing, real-document acceptance and larger-drawing benchmarks. Scanned pages excluded. |
 
 Updated next sequence: core editing acceptance on real drawings, including combined and grouped behaviors, before export completeness or equipment templates. Keep exploration flexible without letting feature expansion outrun the core workflow.
 

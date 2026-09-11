@@ -33,7 +33,11 @@ Imported symbol libraries remain a later feature. Prepare their contract around 
 
 ## PDF control drawings
 
-Future exploration: import a vector PDF control drawing and use its vector content as the visual foundation for live Niagara graphics. Scanned and raster-only PDFs are outside this planned slice.
+Implemented first slice: local Poppler conversion, page preview/selection, painted SVG pieces in native frames, manual grouping and existing Niagara behaviors. Pieces are native image shapes containing vectors, not editable path nodes, and use tldraw's native proportional image-resize behavior. A locked white paper layer preserves drawing contrast in both themes. Artwork-alpha masks keep imported-piece fills off the surrounding rectangle, including black stroked symbols. Native assets, grouping, undo and snapshots are reused; no new persistent shape schema is required.
+
+Remaining: representative user-document acceptance, splitting compound paths into subparts, assisted symbol recognition/remapping, larger-document performance work and browser-only conversion. The initial importer takes one page at a time and excludes scanned pages.
+
+Longer-term direction: use vector PDF control drawings as the visual foundation for live Niagara graphics. Scanned and raster-only PDFs remain outside this scope.
 
 The practical first version should:
 

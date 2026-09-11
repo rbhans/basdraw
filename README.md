@@ -2,7 +2,7 @@
 
 basdraw is an early Niagara graphics canvas built on the tldraw Agent Starter Kit. It connects to a Niagara station through baskStream, lets an operator browse or search the station, and binds live point values to native canvas shapes.
 
-Future directions, including imported PDF control drawings with animatable overlays, are recorded in [ROADMAP.md](ROADMAP.md).
+Future directions and the scope of vector PDF importing are recorded in [ROADMAP.md](ROADMAP.md).
 
 The first working slice is intentionally narrow:
 
@@ -22,6 +22,7 @@ The first working slice is intentionally narrow:
 - Open Table and Trend from the native bottom toolbar. Choose points, then review table rows/columns or chart settings in a tldraw dialog before creating the shape.
 - Browse points in a collapsible floating panel, and drag a point onto an unlocked shape or group to begin adding a behavior.
 - Duplicate shapes with their bindings, and undo or redo binding changes through tldraw.
+- Import vector PDF pages as selectable SVG pieces, group drawing symbols, and attach Niagara behaviors.
 - Keep the AI agent code present but hide the agent UI when no model provider is configured.
 
 The current Niagara integration is read-only. The app does not expose baskStream write, alarm action, tag write, or relation write operations.
@@ -33,6 +34,7 @@ Requirements:
 - Node.js 22.12 or newer
 - A Niagara station with the baskStream service installed and running
 - Network access from this computer to the station web port
+- Optional for PDF import: Poppler (`pdfinfo` and `pdftocairo`) on PATH. On macOS, install with `brew install poppler`.
 
 Install and start both the Vite app and the loopback baskStream bridge:
 
@@ -59,7 +61,7 @@ Connection profiles use a separate `bas-whiteboard.connection-profiles.v1` recor
 
 Runtime labels, status fills, percentage fills, visibility, opacity, rotation, scale, and movement are presentation-only. They do not modify or save the selected shape's base fill, label, opacity, position, rotation, scale, or geometry. Disconnecting therefore removes the live presentation without changing the saved drawing.
 
-Continuous rotation uses the center of the selected shape or group. Continuous movement travels along a canvas axis and returns to the saved position on each cycle. Shape artwork, runtime fills, and percentage fills share the same runtime transforms. Percentage level changes use a short transform transition, rotation uses linear timing, and travel uses eased direction changes. Motion is disabled when the operating system requests reduced motion.
+Continuous rotation uses the selected pivot (the shape or group center by default). Continuous movement travels along a canvas axis and returns to the saved position on each cycle. One runtime controller per editor uses tldraw's tick clock, with a shared phase per continuous binding so artwork, fills and traveling labels stay synchronized. Numeric transforms, opacity and percentage fills retarget smoothly over 180ms from their displayed state. Animation frames update presentation, not saved geometry or undo history. The editor's reduced-motion preference stops cycles and makes value transitions immediate. See [the runtime extension guide](docs/runtime-animations.md).
 
 Legacy version 1 and 2 BAS records are read once and attached to their existing shapes. Bindings for absent shapes are retained only in the untouched legacy record. A document marker prevents removed bindings from being restored again on reload. Each saved behavior has a stable local key; its runtime identity combines that key with the owning shape ID, so multiple behaviors and clipboard copies remain independently editable. Legacy entries retain property-based keys until normalized by an edit. Unsupported effect/version entries remain in metadata, are excluded from runtime, and survive edits to recognized behaviors. Live snapshots and chart samples stay outside tldraw history.
 
@@ -134,16 +136,43 @@ Use **Add behavior → Navigation → Navigate to shape**, choose a destination 
 
 Links use stable shape IDs, so renaming or moving the destination does not break them. Deleted destinations disable Go until replaced or restored with Undo. Duplicate shapes get distinct names; duplicated navigation still points to the original destination. Names and navigation are saved with the drawing, support native undo and work without a station connection.
 
+## Vector PDF control drawings
+
+Choose **Import vector PDF** in the bottom toolbar (or More). Choose a local PDF, enter a page number, **Preview page**, then **Import page**. Each page becomes a native tldraw frame with a locked white paper background. Click or Shift-select pieces inside the frame, or drag a selection around the symbol, then use native **Group** (Cmd/Ctrl+G). Add behaviors to the resulting group as usual.
+
+The importer preserves vector curves, source colors, clipping and font outlines. Each painted piece is a native SVG image asset, not a bitmap and not an editable Bézier path. Text runs and compound paths remain intact; compositing groups may also remain a single piece to preserve appearance. Symbols are not automatically recognized. You can move, resize, rotate, duplicate, group and bind the pieces; individual pieces use tldraw's native image resize behavior, so corner-handle resizing preserves their original proportions. Status/percentage fills cover painted artwork and the interiors of closed outlines, including coil contours that return to their starting point without an explicit close command. Open pipes and diagonals retain their ink-only coverage; clipping and compound-path holes are preserved. This works on existing imports without changing the saved artwork. Outlines assembled from separate open pieces still need a closed shape to define their interior.
+
+Conversion runs locally through a separate service on `127.0.0.1:8790`, using Poppler. `npm run dev` starts it alongside the UI and station bridge. If using `npm run dev:ui`, also run `npm run import:pdf`. Files never go to Niagara or an external conversion provider. Temporary conversion files are removed after each request; the saved drawing contains self-contained SVG assets and does not need the source PDF or converter for playback.
+
+Initial limits: one page per import, 25 MB input, 3,000 painted pieces per page and the existing canvas shape limit. Oversized/invalid/password-protected files report errors without replacing the drawing. Raster-only or apparently full-page scanned artwork is rejected; small embedded image regions are retained with a warning. Check the preview for fidelity on your actual drawing before importing. Automatic symbol recognition, splitting compound paths, and browser-only PDF conversion remain later work.
+
 ## Verification
+
+### Web Views
+
+Choose **Web View** in the bottom toolbar (or its More menu) and enter an HTTP/HTTPS address. The frame resizes normally; its title and address can be edited in the properties panel. Double-click to interact with the page, then use **Back to canvas** when finished. Selecting Laser or Draw automatically disables page interaction so you can mark over the embedded content without clicking its controls.
+
+Use **Content scale (%)** in Web View settings to zoom the embedded page from 25–400%, independently of the frame size. The header stays the same size; resize handles still change width and height freely. Older Web Views default to 100%. Scaling does not reload the page, and laser/drawing tools still work over it.
+
+Web Views are saved with the drawing and support duplication and undo/redo. The address, title and scale are stored, not browser credentials or page contents. Exported images/SVGs include a placeholder with the title and address, not the live page.
+
+This is an iframe, not an unrestricted browser. Sites can refuse embedding through CSP or X-Frame-Options, browser cookie policies can affect login, and HTTPS canvases cannot generally embed HTTP pages. Niagara PX rendering/login must be tested with the actual station URL; the baskStream connection does not authenticate the iframe. **Open in browser** is available when embedding does not work. No authentication proxy or station-security changes are included.
+
+`/scripts/web-view-qa.html` is an isolated, unsaved test canvas with local embedded content, lifecycle/URL checks, and real laser/draw interaction testing. It never connects to a station.
+
+### Build and regression checks
 
 ```bash
 npx tsc --noEmit
 npm run build
+node --test scripts/vector-pdf.test.mjs
 ```
 
 With the dev server running, open `/scripts/canvas-regression.html` to run thirty-two isolated browser checks for bindings, native history, duplication, clipboard metadata, snapshots, retained driver settings, disabled effects, label appearance, table assignment conflicts, unique shape names, rename validation, navigation after moving or renaming targets, deleted-target recovery cross-page navigation, pivot resizing, group coordinate conversion, pivot persistence and malformed pivot rejection. Additional checks cover multiple labels, independent edits and clipboard copies, conflicting add/re-enable/axis edits, separate movement timings, unsupported metadata preservation, label stacking, locked edits, group precedence and movement-vector conversion. The fixture has no station connection and does not use the saved canvas.
 
 Open `/scripts/behavior-qa.html` for the isolated interactive behavior fixture. It has synthetic temperature, setpoint and fan points, no station connection, and no saved drawing. This is UI/runtime regression coverage, not live-station acceptance.
+
+Open `/scripts/vector-pdf-qa.html` with the local PDF service running for vector extraction/render comparison, clipping/font/rotation fidelity, scan rejection, native import undo/redo, grouping, snapshot reload, and synthetic group animation. It also checks outline-only coil interiors, open pipes, holes, relative paths, and single/group runtime fills. The PDF sample is generated in memory; the fill regression uses an isolated coil outline that reproduced the reported issue.
 
 The architecture review, remaining limitations, and proposed feature priorities are in [PROJECT-REVIEW.md](PROJECT-REVIEW.md).
 

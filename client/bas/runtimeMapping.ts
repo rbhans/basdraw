@@ -7,9 +7,9 @@ export type RuntimeShapePresentation = {
 	translation?: { x: number; y: number }
 	rotation?: number
 	scale?: number
-	spin?: { secondsPerTurn: number; direction: 'clockwise' | 'counterclockwise' }
-	motions?: Array<{ x: number; y: number; secondsPerCycle: number }>
-	motion?: { x: number; y: number; secondsPerCycle: number }
+	spin?: { id: string; secondsPerTurn: number; direction: 'clockwise' | 'counterclockwise' }
+	motions?: Array<{ id: string; x: number; y: number; secondsPerCycle: number }>
+	motion?: { id: string; x: number; y: number; secondsPerCycle: number }
 }
 
 export function evaluateBinding(binding: ShapeBinding, snapshot: PointSnapshot): number | null {
@@ -65,6 +65,7 @@ export function getRuntimeShapePresentation(
 					presentation.rotation = binding.options.restAngle
 					if (output >= 0.5) {
 						presentation.spin = {
+							id: binding.id,
 							secondsPerTurn: clamp(binding.options.secondsPerTurn, 0.1, 60),
 							direction: binding.options.direction,
 						}
@@ -90,6 +91,7 @@ export function getRuntimeShapePresentation(
 					if (output >= 0.5) {
 						const signedDistance = Math.max(0, options.distance) * (options.direction === 'negative' ? -1 : 1)
 						const motion = {
+							id: binding.id,
 							x: options.axis === 'x' ? signedDistance : 0,
 							y: options.axis === 'y' ? signedDistance : 0,
 							secondsPerCycle: clamp(options.secondsPerCycle, 0.2, 120),
