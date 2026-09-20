@@ -173,8 +173,8 @@ export const AI_READY_ACTIONS = [
 	'create_binding',
 	'update_binding',
 	'remove_binding',
-	'search_niagara',
-	'read_point_values',
+	'list_connections',
+	'use_connection_tool',
 	'arrange_shapes',
 ] as const
 

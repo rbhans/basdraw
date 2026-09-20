@@ -23,7 +23,10 @@ The first working slice is intentionally narrow:
 - Browse points in a collapsible floating panel, and drag a point onto an unlocked shape or group to begin adding a behavior.
 - Duplicate shapes with their bindings, and undo or redo binding changes through tldraw.
 - Import vector PDF pages as selectable SVG pieces, group drawing symbols, and attach Niagara behaviors.
-- Keep the AI agent code present but hide the agent UI when no model provider is configured.
+- Let the canvas AI use a connected baskStream adapter to browse the station, search points, and read bounded current values before creating or editing canvas content.
+- Let enabled plugins teach Canvas AI how to inspect and create their native content. Tables, trends, web views, live behaviors and relationship arrows use one plugin capability boundary.
+- Choose Full control, Canvas control, Analysis or View only without coupling future connection types to baskStream.
+- Keep the AI agent UI optional and hide it when the Canvas AI add-on is disabled.
 
 The current Niagara integration is read-only. The app does not expose baskStream write, alarm action, tag write, or relation write operations.
 
@@ -99,17 +102,24 @@ The module source remains authoritative for protocol changes. This project was i
 
 ## AI foundation
 
-The complete tldraw agent architecture remains in `client/`, `shared/`, and `worker/`. The client checks `/agent/status`; the chat panel is unavailable when no provider key exists.
+The complete tldraw Agent Starter Kit architecture remains in `client/`, `shared/`, and `worker/`. Local development starts a loopback-only Codex App Server bridge and uses the ChatGPT subscription already authenticated by Codex. The client checks `/agent/status`, shows the active ChatGPT plan, and builds its model and reasoning-effort selectors from the live Codex model catalog. The selected model and effort persist with the local agent session and are sent with each turn. With no subscription connection, **Set up AI** opens the managed ChatGPT login flow.
 
-For local AI development, create `.dev.vars` with at least one supported provider key:
+AI skills and references use the separate [D1 knowledge backend](docs/knowledge-backend.md). Normal drawing data remains in tldraw persistence. Apply the local schema once with `npm run knowledge:migrate`; enabled global, project and active-connection entries are then selected by the Worker for each model request.
+
+Enabled connection plugins can also register runtime AI tools. The agent sees redacted connection/tool descriptions and calls one generic typed action; the local adapter performs the protocol-specific request and returns a bounded result for the next agent turn. The built-in baskStream adapter currently exposes read-only `browse`, `search`, and batch `read`. Alternative connection plugins can expose entirely different operations without inheriting a Niagara-shaped interface. Write tools are visible only in Full control and pause for an **Allow once** confirmation before execution.
+
+The header access menu applies orthogonal policy presets. Full control enables AI canvas edits and connection read/write tools. Canvas control keeps AI canvas editing but shares no BAS tools. Analysis makes the canvas read-only while allowing AI inspection and read-only connection tools. View only makes the canvas read-only and turns Canvas AI off. Switching profiles cancels any active model request.
+
+No OpenAI API key is required for local subscription use. Install Codex, sign in with ChatGPT, then start basdraw normally:
 
 ```text
-ANTHROPIC_API_KEY=...
-GOOGLE_API_KEY=...
-OPENAI_API_KEY=...
+codex login
+npm run dev
 ```
 
-The BAS document reducer exposes explicit binding actions in `client/bas/types.ts`, and the intended future agent surface is named there:
+The bridge uses `codex app-server`, never copies ChatGPT tokens into basdraw and runs canvas turns in an empty temporary working directory with read-only sandboxing, no approvals and explicit instructions not to invoke tools. Optional OpenAI, Anthropic and Google API-key adapters remain in the starter architecture for deployments that choose them, but they are not required. See [AI providers](docs/ai-providers.md) for the complete boundary.
+
+The plugin runtime exposes bounded native canvas operations without adding a new shared agent action for every add-on. Canvas editing, connection-backed browse/search/read, data widgets, web views, relationship arrows and direct live-behavior create/update/remove are active now. The lower-level BAS document reducer still exposes explicit binding actions in `client/bas/types.ts`:
 
 ```text
 inspect_canvas
@@ -117,12 +127,12 @@ list_bindings
 create_binding
 update_binding
 remove_binding
-search_niagara
-read_point_values
+list_connections
+use_connection_tool
 arrange_shapes
 ```
 
-Niagara credentials, authenticated cookies, and the complete station database must never be added to an AI prompt. Future point context should stay limited to the selected station metadata and values needed for the active request.
+Niagara credentials, authenticated cookies, endpoints, client objects, and the complete station database are never added to an AI prompt. Point context stays limited to the tool metadata and bounded result required for the active request. The bundled canvas skill and feature references are discovered from the same scoped knowledge catalog as project notes. Skills explain how to use available capabilities; they cannot enable an operation. Operational connection writes require runtime confirmation regardless of skill text.
 
 ## Rotation pivots
 
@@ -175,6 +185,8 @@ Open `/scripts/behavior-qa.html` for the isolated interactive behavior fixture. 
 Open `/scripts/vector-pdf-qa.html` with the local PDF service running for vector extraction/render comparison, clipping/font/rotation fidelity, scan rejection, native import undo/redo, grouping, snapshot reload, and synthetic group animation. It also checks outline-only coil interiors, open pipes, holes, relative paths, and single/group runtime fills. The PDF sample is generated in memory; the fill regression uses an isolated coil outline that reproduced the reported issue.
 
 The architecture review, remaining limitations, and proposed feature priorities are in [PROJECT-REVIEW.md](PROJECT-REVIEW.md).
+
+Custom basdraw capabilities are assembled through the [plugin architecture](docs/plugin-architecture.md). It keeps optional authoring tools, property sections, runtime behavior, connections and future agent capabilities independent while preserving saved-canvas compatibility.
 
 The production build currently includes the optional Agent Starter Kit worker, which makes the worker bundle much larger than the browser client. Code splitting and a deployment-specific station bridge are later release concerns.
 

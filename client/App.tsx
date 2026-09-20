@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { createPortal } from 'react-dom'
 import {
 	DefaultSizeStyle,
 	Editor,
@@ -8,6 +9,7 @@ import {
 	TldrawUiToastsProvider,
 	TldrawUiButton,
 	TldrawUiButtonLabel,
+	TldrawUiButtonIcon,
 	TLUiOverrides,
 	useColorMode,
 } from 'tldraw'
@@ -18,99 +20,127 @@ import {
 } from './agent/TldrawAgentAppProvider'
 import { ChatPanel } from './components/ChatPanel'
 import { ChatPanelFallback } from './components/ChatPanelFallback'
+import { AgentSetupPanel } from './components/AgentSetupPanel'
 import { CustomHelperButtons } from './components/CustomHelperButtons'
-import { AgentHighlightOverlayUtil } from './overlays/AgentHighlightOverlayUtil'
-import { TargetAreaTool } from './tools/TargetAreaTool'
-import { TargetShapeTool } from './tools/TargetShapeTool'
 import { BasRuntimeProvider } from './bas/BasRuntimeContext'
 import { BasWorkspaceProvider } from './bas/BasWorkspaceContext'
-import { NiagaraPanel } from './bas/NiagaraPanel'
-import { RuntimeBindingsOverlay } from './bas/RuntimeBindingsOverlay'
-import { RuntimeShapeWrapper } from './bas/RuntimeShapeWrapper'
 import { useBasWorkspace } from './bas/useBasWorkspace'
 import {
 	BAS_TABLE_SHAPE_TYPE,
 	BAS_TREND_SHAPE_TYPE,
 	dataWidgetPointReferences,
-	dataWidgetShapeUtils,
-	type BasTableShape,
-	type BasTrendShape,
 } from './bas/DataWidgetShapes'
-import { DataShapeStylePanel } from './bas/DataShapeStylePanel'
-import { WebViewShapeUtil } from './bas/WebViewShape'
+import { ShellUiContext, ShellUiContainer, ShellDialogs, ShellMenuPanel, ShellNavigationPanel, ShellToolbar, ShellStylePanel } from './components/ShellUi'
 
-import { DataToolbar } from './bas/DataToolbar'
-import { PointDragProvider, CanvasPointDrop } from './bas/PointDrag'
-import { installShapeIdentities } from './bas/shapeIdentity'
-import { ShapeNavigationOverlay } from './bas/ShapeNavigationOverlay'
-
-function CanvasOverlays() { return <><RuntimeBindingsOverlay /><CanvasPointDrop /><ShapeNavigationOverlay /></> }
+import { pluginRegistry } from './plugins/builtinPlugins'
+import { useBasdrawPlugins } from './plugins/PluginContext'
+import {
+	PluginAppPanels,
+	PluginCanvasOverlays,
+	PluginProviders,
+	PluginShapeWrapper,
+	usePluginEditorMount,
+} from './plugins/PluginComponents'
+import { PluginManager } from './plugins/PluginManager'
+import { BASDRAW_PROJECT_ID } from '../shared/knowledge'
+import { setCurrentKnowledgeScope } from './knowledge/currentKnowledgeScope'
+import { EMPTY_AGENT_STATUS, type AgentStatus } from '../shared/models'
+import { useAccessPolicy } from './access/AccessPolicyContext'
+import { AccessModeMenu } from './access/AccessModeMenu'
+import { agentPluginRuntime } from './plugins/AgentPluginRuntime'
 
 // Customize tldraw's styles to play to the agent's strengths
 DefaultSizeStyle.setDefaultValue('s')
 
-// Custom tools for picking context items
-const tools = [TargetShapeTool, TargetAreaTool]
-const overlayUtils = [AgentHighlightOverlayUtil]
-const shapeUtils = [...dataWidgetShapeUtils, WebViewShapeUtil]
-const overrides: TLUiOverrides = {
-	translations: { en: { 'tool.bas-table': 'Equipment table', 'tool.bas-trend': 'Trend chart', 'tool.bas-web-view': 'Web View', 'tool.bas-import-pdf': 'Import vector PDF' } },
-	tools: (editor, tools) => {
-		return {
-			...tools,
-			'target-area': {
-				id: 'target-area',
-				label: 'Pick Area',
-				kbd: 'c',
-				icon: 'tool-frame',
-				onSelect() {
-					editor.setCurrentTool('target-area')
-				},
-			},
-			'target-shape': {
-				id: 'target-shape',
-				label: 'Pick Shape',
-				kbd: 's',
-				icon: 'tool-frame',
-				onSelect() {
-					editor.setCurrentTool('target-shape')
-				},
-			},
-		}
-	},
-}
+// All installed types stay registered so disabling a plugin never makes an existing canvas unreadable.
+const tools = pluginRegistry.tools()
+const overlayUtils = pluginRegistry.overlayUtils()
+const shapeUtils = pluginRegistry.shapeUtils()
 
 function App() {
 	const [app, setApp] = useState<TldrawAgentApp | null>(null)
 	const [editor, setEditor] = useState<Editor | null>(null)
 	const [colorMode, setColorMode] = useState<'light' | 'dark'>('light')
 	const [canvasTitle, setCanvasTitle] = useState('Untitled canvas')
-	const [aiAvailable, setAiAvailable] = useState(false)
+	const [agentStatus, setAgentStatus] = useState<AgentStatus>(EMPTY_AGENT_STATUS)
 	const [showAi, setShowAi] = useState(false)
+	const [aiContainer, setAiContainer] = useState<HTMLDivElement | null>(null)
+	const [headerContainer, setHeaderContainer] = useState<HTMLDivElement | null>(null)
+	const [uiContainer, setUiContainer] = useState<HTMLDivElement | null>(null)
 	const [liveEffects, setLiveEffects] = useState(true)
 	const [widgetPointReferences, setWidgetPointReferences] = useState<string[]>([])
 	const [pageShapeIds, setPageShapeIds] = useState<string[]>([])
 	const [dataWidgetCount, setDataWidgetCount] = useState(0)
-	const workspace = useBasWorkspace(editor, widgetPointReferences, pageShapeIds)
-	useEffect(() => editor ? installShapeIdentities(editor) : undefined, [editor])
-
+	const { enabled, isEnabled } = useBasdrawPlugins()
+	const { policy } = useAccessPolicy()
+	const agentPluginEnabled = isEnabled('canvas-agent')
+	const agentEnabled = agentPluginEnabled && policy.ai !== 'off'
+	const aiAvailable = agentStatus.configured
+	const baskstreamPluginEnabled = isEnabled('niagara-baskstream')
+	const workspace = useBasWorkspace(editor, widgetPointReferences, pageShapeIds, baskstreamPluginEnabled)
+	const overrides = useMemo<TLUiOverrides>(() => ({
+		translations: { en: pluginRegistry.translations(enabled) },
+		tools: (editor, defaultTools) => Object.assign({}, defaultTools, ...pluginRegistry.uiTools(enabled).map(({ id, create }) => ({ [id]: create(editor) }))),
+	}), [enabled])
+	usePluginEditorMount(editor)
+	useEffect(() => {
+		if (!agentEnabled) setShowAi(false)
+	}, [agentEnabled])
+	useEffect(() => {
+		agentPluginRuntime.setPlugins(enabled)
+		return () => agentPluginRuntime.clear()
+	}, [enabled])
+	useEffect(() => {
+		if (!editor) return
+		const readonly = policy.canvas === 'read'
+		editor.updateInstanceState({ isReadonly: readonly })
+		if (readonly) editor.setCurrentTool('select')
+	}, [editor, policy.canvas])
+	useEffect(() => {
+		setCurrentKnowledgeScope({
+			projectId: BASDRAW_PROJECT_ID,
+			connectionId: workspace.connectedProfile?.alias ?? null,
+			pluginIds: enabled.map((plugin) => plugin.id),
+		})
+		return () => setCurrentKnowledgeScope({ projectId: null, connectionId: null, pluginIds: [] })
+	}, [enabled, workspace.connectedProfile?.alias])
 	const handleUnmount = useCallback(() => {
 		setApp(null)
 	}, [])
 
-	useEffect(() => {
-		let cancelled = false
+	const refreshAgentStatus = useCallback(() => {
+		if (!agentEnabled) {
+			setAgentStatus(EMPTY_AGENT_STATUS)
+			return
+		}
 		void fetch('/agent/status')
 			.then((response) => response.ok ? response.json() : null)
 			.then((result: unknown) => {
-				const configured = result && typeof result === 'object' && 'configured' in result
-					? Boolean((result as { configured?: unknown }).configured)
-					: false
-				if (!cancelled) setAiAvailable(configured)
+				if (!result || typeof result !== 'object') return setAgentStatus(EMPTY_AGENT_STATUS)
+				const status = result as Partial<AgentStatus>
+				setAgentStatus({
+					configured: Boolean(status.configured),
+					providers: {
+						codex: Boolean(status.providers?.codex),
+						openai: Boolean(status.providers?.openai),
+						anthropic: Boolean(status.providers?.anthropic),
+						google: Boolean(status.providers?.google),
+					},
+					codex: status.codex && typeof status.codex === 'object' ? {
+						available: Boolean(status.codex.available),
+						authenticated: Boolean(status.codex.authenticated),
+						authMode: typeof status.codex.authMode === 'string' ? status.codex.authMode : null,
+						planType: typeof status.codex.planType === 'string' ? status.codex.planType : null,
+						models: Array.isArray(status.codex.models) ? status.codex.models : [],
+					} : undefined,
+				})
 			})
-			.catch(() => undefined)
-		return () => { cancelled = true }
-	}, [])
+			.catch(() => setAgentStatus(EMPTY_AGENT_STATUS))
+	}, [agentEnabled])
+
+	useEffect(() => {
+		refreshAgentStatus()
+	}, [refreshAgentStatus])
 
 	useEffect(() => {
 		if (!editor) return
@@ -128,17 +158,14 @@ function App() {
 	// Custom components that need the agent app's React context
 	const components: TLComponents = useMemo(() => {
 		return {
-			TopPanel: () => <div className="bas-preview-control">
-				<TldrawUiButton type="normal" isActive={liveEffects} aria-pressed={liveEffects}
-					title="Pause live effects to arrange the saved artwork. Tables and charts stay connected."
-					onClick={() => setLiveEffects((current) => !current)}>
-					<TldrawUiButtonLabel>{liveEffects ? 'Live effects on' : 'Live effects paused'}</TldrawUiButtonLabel>
-				</TldrawUiButton>
-			</div>,
-			StylePanel: DataShapeStylePanel,
-			Toolbar: DataToolbar,
-			InFrontOfTheCanvas: CanvasOverlays,
-			ShapeWrapper: RuntimeShapeWrapper,
+			TopPanel: null,
+			StylePanel: ShellStylePanel,
+			Toolbar: ShellToolbar,
+			MenuPanel: ShellMenuPanel,
+			NavigationPanel: ShellNavigationPanel,
+			Dialogs: ShellDialogs,
+			InFrontOfTheCanvas: PluginCanvasOverlays,
+			ShapeWrapper: PluginShapeWrapper,
 			HelperButtons: () =>
 				app && (
 					<TldrawAgentAppContextProvider app={app}>
@@ -146,69 +173,84 @@ function App() {
 					</TldrawAgentAppContextProvider>
 				),
 		}
-	}, [app, liveEffects])
+	}, [app])
 
 	return (
+		<ShellUiContext.Provider value={uiContainer}>
 		<TldrawUiToastsProvider>
 			<BasWorkspaceProvider workspace={workspace}>
-			<PointDragProvider>
-			<BasRuntimeProvider value={{
-				document: { ...workspace.document, bindings: liveEffects && workspace.status === 'connected' ? workspace.document.bindings.filter((binding) => binding.enabled !== false && binding.stationAlias === workspace.connectedProfile?.alias) : [] },
-				connected: workspace.status === 'connected',
-				stationAlias: workspace.connectedProfile?.alias || null,
-				historySeries: workspace.historySeries,
-				loadHistory: workspace.loadHistory,
-				snapshots: workspace.snapshots,
-			}}>
-				<div className={`bas-app-shell tl-theme__${colorMode} ${showAi ? 'ai-open' : ''}`}>
-					<NiagaraPanel workspace={workspace} />
-					<main className="canvas-workspace">
-						<header className="canvas-header">
-							<div className="canvas-header-identity"><div className="product-header"><div className="product-lockup"><div className="product-mark" aria-hidden="true"><span>~</span></div><h1>basdraw</h1></div><p>powered by tldraw</p></div>
-							<div className="canvas-document-title">
-								<strong>{canvasTitle}</strong>
-								<span>{workspace.document.bindings.length} {workspace.document.bindings.length === 1 ? 'binding' : 'bindings'}{dataWidgetCount > 0 ? ` · ${dataWidgetCount} data ${dataWidgetCount === 1 ? 'shape' : 'shapes'}` : ''}</span>
-							</div></div>
-							<button
-								className="ai-toggle"
-								disabled={!aiAvailable}
-								title={aiAvailable ? 'Toggle AI canvas agent' : 'Add a model provider key to .dev.vars to enable the agent'}
-								onClick={() => setShowAi((current) => !current)}
-							>
-								<span className="ai-status-dot" data-active={aiAvailable} />
-								{showAi ? 'Close agent' : aiAvailable ? 'Open agent' : 'Agent off'}
-							</button>
-						</header>
-						<div className="tldraw-canvas">
-							<Tldraw
-								licenseKey={import.meta.env.VITE_TLDRAW_LICENSE_KEY}
-								persistenceKey="bas-whiteboard-canvas-v1"
-								shapeUtils={shapeUtils}
-								tools={tools}
-								overlayUtils={overlayUtils}
-								overrides={overrides}
-								components={components}
-								onMount={setEditor}
-							>
-								<ThemeSync onChange={setColorMode} />
-								<TldrawAgentAppProvider onMount={setApp} onUnmount={handleUnmount} />
-							</Tldraw>
-						</div>
-					</main>
-					{showAi && aiAvailable && (
-						<ErrorBoundary fallback={ChatPanelFallback}>
-							{app && (
-								<TldrawAgentAppContextProvider app={app}>
-									<ChatPanel />
-								</TldrawAgentAppContextProvider>
+				<PluginProviders>
+					<BasRuntimeProvider value={{
+						document: { ...workspace.document, bindings: liveEffects && workspace.status === 'connected' ? workspace.document.bindings.filter((binding) => binding.enabled !== false && binding.stationAlias === workspace.connectedProfile?.alias) : [] },
+						connected: workspace.status === 'connected',
+						stationAlias: workspace.connectedProfile?.alias || null,
+						historySeries: workspace.historySeries,
+						loadHistory: workspace.loadHistory,
+						snapshots: workspace.snapshots,
+					}}>
+						<div className={`bas-app-shell tl-theme__${colorMode} ${showAi ? 'ai-open' : ''}`}>
+							<main className="canvas-workspace">
+								<header className="canvas-header">
+									<div className="canvas-header-identity"><div className="product-header"><div className="product-lockup"><div className="product-mark" aria-hidden="true"><span>~</span></div><h1>basdraw</h1></div><p>powered by tldraw</p></div>
+									<div className="canvas-document-title">
+										<strong>{canvasTitle}</strong>
+										<span>{workspace.document.bindings.length} {workspace.document.bindings.length === 1 ? 'binding' : 'bindings'}{dataWidgetCount > 0 ? ` · ${dataWidgetCount} data ${dataWidgetCount === 1 ? 'shape' : 'shapes'}` : ''}</span>
+									</div></div>
+									<div ref={setHeaderContainer} className={`canvas-header-actions tl-container tl-theme__${colorMode}`} />
+								</header>
+								<div className="tldraw-canvas">
+									<PluginAppPanels area="left" />
+									<Tldraw
+										licenseKey={import.meta.env.VITE_TLDRAW_LICENSE_KEY}
+										persistenceKey={BASDRAW_PROJECT_ID}
+										shapeUtils={shapeUtils}
+										tools={tools}
+										overlayUtils={overlayUtils}
+										overrides={overrides}
+										components={components}
+										onMount={setEditor}
+									>
+										<ThemeSync onChange={setColorMode} />
+										{headerContainer && createPortal(<ShellUiContainer>
+											<TldrawUiButton type="icon" aria-label={liveEffects ? 'Stop live effects' : 'Play live effects'}
+												tooltip={liveEffects ? 'Stop live effects' : 'Play live effects'}
+												onClick={() => setLiveEffects((current) => !current)}>
+												<TldrawUiButtonIcon icon={<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+													{liveEffects ? <rect x="6" y="6" width="12" height="12" rx="1" /> : <path d="M7 4.5v15L20 12z" />}
+												</svg>} />
+											</TldrawUiButton>
+											<AccessModeMenu />
+											<PluginManager />
+											<TldrawUiButton type="normal" disabled={!agentEnabled}
+												onClick={() => setShowAi((current) => !current)}>
+												<span className="ai-status-dot" data-active={aiAvailable && agentEnabled} />
+												<TldrawUiButtonLabel>{showAi ? 'Close agent' : policy.ai === 'off' ? 'AI off' : aiAvailable && agentEnabled ? 'Open agent' : 'Set up AI'}</TldrawUiButtonLabel>
+											</TldrawUiButton>
+										</ShellUiContainer>, headerContainer)}
+										{agentEnabled && <TldrawAgentAppProvider accessPolicy={policy} onMount={setApp} onUnmount={handleUnmount} />}
+										{/* Preserve the SDK UI context, with the dock as the popup container. */}
+										{showAi && agentPluginEnabled && aiContainer && createPortal(
+											<ShellUiContainer>
+												{aiAvailable ? <ErrorBoundary fallback={ChatPanelFallback}>
+													{app && <TldrawAgentAppContextProvider app={app}>
+														<ChatPanel status={agentStatus} onClose={() => setShowAi(false)} />
+													</TldrawAgentAppContextProvider>}
+												</ErrorBoundary> : <AgentSetupPanel status={agentStatus} onRefresh={refreshAgentStatus} />}
+											</ShellUiContainer>, aiContainer
+										)}
+									</Tldraw>
+								</div>
+							</main>
+							{showAi && agentEnabled && (
+								<div ref={setAiContainer} className={`tl-container bas-ai-dock tl-theme__${colorMode}`} />
 							)}
-						</ErrorBoundary>
-					)}
-				</div>
-			</BasRuntimeProvider>
-			</PointDragProvider>
+							<div ref={setUiContainer} className={`tl-container bas-ui-layer tl-theme__${colorMode}`} />
+						</div>
+					</BasRuntimeProvider>
+				</PluginProviders>
 			</BasWorkspaceProvider>
 		</TldrawUiToastsProvider>
+		</ShellUiContext.Provider>
 	)
 }
 

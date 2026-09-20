@@ -1,15 +1,12 @@
+import { TldrawUiButton, TldrawUiButtonLabel } from 'tldraw'
+
 export function ChatPanelFallback() {
 	return (
-		<div className="chat-fallback">
+		<div className="chat-panel agent-setup-panel" role="alert">
 			<p>Error loading chat history</p>
-			<button
-				onClick={() => {
-					localStorage.clear()
-					window.location.reload()
-				}}
-			>
-				Clear chat history
-			</button>
+			<TldrawUiButton type="normal" onClick={() => window.location.reload()}>
+				<TldrawUiButtonLabel>Reload app</TldrawUiButtonLabel>
+			</TldrawUiButton>
 		</div>
 	)
 }

@@ -3,6 +3,8 @@ import { WorkerEntrypoint } from 'cloudflare:workers'
 import { AutoRouter, cors, error, IRequest } from 'itty-router'
 import { Environment } from './environment'
 import { stream } from './routes/stream'
+import { createKnowledge, deleteKnowledge, getKnowledge, listKnowledge, previewKnowledgeContext, updateKnowledge, retrieveKnowledge } from './routes/knowledge'
+import { getAgentStatus, startChatGptLogin } from './routes/agent'
 
 const { preflight, corsify } = cors({ origin: '*' })
 
@@ -14,14 +16,15 @@ const router = AutoRouter<IRequest, [env: Environment, ctx: ExecutionContext]>({
 		return error(e)
 	},
 })
-	.get('/agent/status', (_request, env) => Response.json({
-		configured: Boolean(env.OPENAI_API_KEY || env.ANTHROPIC_API_KEY || env.GOOGLE_API_KEY),
-		providers: {
-			openai: Boolean(env.OPENAI_API_KEY),
-			anthropic: Boolean(env.ANTHROPIC_API_KEY),
-			google: Boolean(env.GOOGLE_API_KEY),
-		},
-	}))
+	.get('/agent/status', getAgentStatus)
+	.post('/agent/login', startChatGptLogin)
+	.get('/api/knowledge', listKnowledge)
+	.get('/api/knowledge/context', previewKnowledgeContext)
+	.post('/api/knowledge/retrieve', retrieveKnowledge)
+	.get('/api/knowledge/:id', getKnowledge)
+	.post('/api/knowledge', createKnowledge)
+	.patch('/api/knowledge/:id', updateKnowledge)
+	.delete('/api/knowledge/:id', deleteKnowledge)
 	.post('/stream', stream)
 
 export default class extends WorkerEntrypoint<Environment> {

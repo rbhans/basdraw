@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react'
 import { useValue } from 'tldraw'
 import { TldrawAgent } from '../../agent/TldrawAgent'
 import { ChatHistorySection, getAgentHistorySections } from './ChatHistorySection'
+import { useAccessPolicy } from '../../access/AccessPolicyContext'
 
 /*
 Chat history is stored as a list of history items.
@@ -31,6 +32,7 @@ Here's an example of how the UI might look:
 */
 
 export function ChatHistory({ agent }: { agent: TldrawAgent }) {
+	const { policy } = useAccessPolicy()
 	const historyItems = useValue('chatHistory', () => agent.chat.getHistory(), [agent])
 	const sections = getAgentHistorySections(historyItems)
 	const historyRef = useRef<HTMLDivElement>(null)
@@ -76,6 +78,12 @@ export function ChatHistory({ agent }: { agent: TldrawAgent }) {
 
 	return (
 		<div className="chat-history" ref={historyRef} onScroll={handleScroll}>
+			{sections.length === 0 && <div className="chat-empty">
+				<strong>{policy.ai === 'analyze' ? 'Analyze your canvas' : 'Work with your canvas'}</strong>
+				<p>{policy.ai === 'analyze'
+					? 'Ask questions about the drawing or connected read-only data. Canvas and BAS changes are disabled.'
+					: "Ask a question or describe what you'd like to change. Select shapes to include them as context."}</p>
+			</div>}
 			{sections.map((section, i) => {
 				return (
 					<ChatHistorySection

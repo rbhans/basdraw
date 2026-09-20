@@ -19,6 +19,15 @@ export const RuntimeShapeWrapper = forwardRef(function RuntimeShapeWrapper(
 	</DefaultShapeWrapper>
 })
 
+export function RuntimeShapeDecorator({ shape, children }: { shape: TLShape; children: ReactNode }) {
+	const editor = useEditor()
+	const { document, snapshots } = useBasRuntime()
+	const bindings = bindingsForRenderedShape(editor, shape, document.bindings)
+	return bindings.length
+		? <RuntimeShapeContent shape={shape} bindings={bindings} snapshots={snapshots}>{children}</RuntimeShapeContent>
+		: children
+}
+
 function RuntimeShapeContent({ shape, bindings, snapshots, children }: { shape: TLShape; bindings: ShapeBinding[]; snapshots: Record<string, PointSnapshot>; children: ReactNode }) {
 	const editor = useEditor()
 	const presentation = getRuntimeShapePresentation(bindings, snapshots)

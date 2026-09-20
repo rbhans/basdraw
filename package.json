@@ -7,10 +7,13 @@
 	"scripts": {
 		"build": "WRANGLER_WRITE_LOGS=false vite build",
 		"bridge": "node scripts/baskstream-bridge.mjs",
+		"codex:bridge": "node scripts/codex-subscription-bridge.mjs",
 		"import:pdf": "node scripts/vector-import-server.mjs",
 		"dev": "node scripts/dev.mjs",
 		"dev:ui": "vite --host 127.0.0.1",
+		"knowledge:migrate": "WRANGLER_WRITE_LOGS=false wrangler d1 migrations apply basdraw-knowledge --local",
 		"preview": "vite preview",
+		"test": "node --experimental-strip-types --test scripts/*.test.mjs",
 		"typecheck": "tsc --noEmit",
 		"validate": "npm run typecheck && npm run build"
 	},

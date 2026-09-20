@@ -1,5 +1,45 @@
-export type AgentModelName = keyof typeof AGENT_MODEL_DEFINITIONS
-export type AgentModelProvider = 'openai' | 'anthropic' | 'google'
+export type AgentModelName = keyof typeof AGENT_MODEL_DEFINITIONS | `codex:${string}`
+export type AgentModelProvider = 'codex' | 'openai' | 'anthropic' | 'google'
+
+export type AgentReasoningEffort =
+	| 'none'
+	| 'minimal'
+	| 'low'
+	| 'medium'
+	| 'high'
+	| 'xhigh'
+	| 'max'
+	| 'ultra'
+
+export interface CodexModelInfo {
+	id: string
+	label: string
+	isDefault: boolean
+	defaultReasoningEffort: AgentReasoningEffort
+	supportedReasoningEfforts: Array<{
+		value: AgentReasoningEffort
+		description: string
+	}>
+}
+
+export type AgentProviderAvailability = Record<AgentModelProvider, boolean>
+
+export interface AgentStatus {
+	configured: boolean
+	providers: AgentProviderAvailability
+	codex?: {
+		available: boolean
+		authenticated: boolean
+		authMode: string | null
+		planType: string | null
+		models: CodexModelInfo[]
+	}
+}
+
+export const EMPTY_AGENT_STATUS: AgentStatus = {
+	configured: false,
+	providers: { codex: false, openai: false, anthropic: false, google: false },
+}
 
 /** Adaptive-thinking mode passed to the Anthropic provider. */
 export type AnthropicThinking = 'adaptive' | 'disabled'
@@ -16,6 +56,7 @@ export type GeminiThinkingLevel = 'minimal' | 'low' | 'medium' | 'high'
 interface BaseAgentModelDefinition {
 	name: AgentModelName
 	id: string
+	displayName?: string
 
 	/**
 	 * Whether the model accepts a prefilled assistant turn to force the JSON start.
@@ -51,12 +92,25 @@ export interface OpenAIModelDefinition extends BaseAgentModelDefinition {
 	reasoningEffort: OpenAIReasoningEffort
 }
 
+export interface CodexModelDefinition extends BaseAgentModelDefinition {
+	provider: 'codex'
+}
+
 export type AgentModelDefinition =
+	| CodexModelDefinition
 	| AnthropicModelDefinition
 	| GoogleModelDefinition
 	| OpenAIModelDefinition
 
 export const AGENT_MODEL_DEFINITIONS = {
+	'codex-subscription': {
+		name: 'codex-subscription',
+		id: 'default',
+		provider: 'codex',
+		supportsPrefill: false,
+		supportsTemperature: false,
+	},
+
 	// Anthropic models
 	// sonnet 4.6 is recommended
 	'claude-opus-4-8': {
@@ -137,13 +191,34 @@ export const AGENT_MODEL_DEFINITIONS = {
 	},
 } as const
 
-export const DEFAULT_MODEL_NAME: AgentModelName = 'claude-sonnet-4-6'
+export const DEFAULT_MODEL_NAME: AgentModelName = 'codex-subscription'
+
+export const DEFAULT_REASONING_EFFORT: AgentReasoningEffort = 'low'
+
+export function getAgentModelLabel(modelName: AgentModelName) {
+	if (modelName === 'codex-subscription' || modelName === 'codex:default') return 'ChatGPT default'
+	if (modelName.startsWith('codex:')) return modelName.slice('codex:'.length)
+	return modelName
+}
 
 /**
  * Check if a string is a valid AgentModelName.
  */
 export function isValidModelName(value: string | undefined): value is AgentModelName {
-	return !!value && value in AGENT_MODEL_DEFINITIONS
+	return !!value && (value in AGENT_MODEL_DEFINITIONS || /^codex:[A-Za-z0-9._-]+$/.test(value))
+}
+
+export function isReasoningEffort(value: unknown): value is AgentReasoningEffort {
+	return typeof value === 'string' && [
+		'none',
+		'minimal',
+		'low',
+		'medium',
+		'high',
+		'xhigh',
+		'max',
+		'ultra',
+	].includes(value)
 }
 
 /**
@@ -152,9 +227,37 @@ export function isValidModelName(value: string | undefined): value is AgentModel
  * @returns The full definition of the model.
  */
 export function getAgentModelDefinition(modelName: AgentModelName): AgentModelDefinition {
-	const definition = AGENT_MODEL_DEFINITIONS[modelName]
+	if (modelName.startsWith('codex:')) {
+		return {
+			name: modelName,
+			id: modelName.slice('codex:'.length),
+			provider: 'codex',
+			supportsPrefill: false,
+			supportsTemperature: false,
+		}
+	}
+	const definition = AGENT_MODEL_DEFINITIONS[modelName as keyof typeof AGENT_MODEL_DEFINITIONS]
 	if (!definition) {
 		throw new Error(`Model ${modelName} not found`)
 	}
 	return definition
+}
+
+export function getAvailableAgentModels(status: Pick<AgentStatus, 'providers' | 'codex'>): AgentModelDefinition[] {
+	const apiModels = Object.values(AGENT_MODEL_DEFINITIONS).filter(
+		(model) => model.provider !== 'codex' && status.providers[model.provider]
+	)
+	const codexModels: AgentModelDefinition[] = status.providers.codex
+		? status.codex?.models.length
+			? status.codex.models.map((model) => ({
+				name: `codex:${model.id}` as AgentModelName,
+				id: model.id,
+				displayName: model.label,
+				provider: 'codex' as const,
+				supportsPrefill: false,
+				supportsTemperature: false,
+			}))
+			: [AGENT_MODEL_DEFINITIONS['codex-subscription']]
+		: []
+	return [...codexModels, ...apiModels]
 }

@@ -1,149 +1,81 @@
 import { FormEventHandler, useState } from 'react'
-import { Editor, useValue } from 'tldraw'
-import { AtIcon } from '../../shared/icons/AtIcon'
-import { BrainIcon } from '../../shared/icons/BrainIcon'
-import { ChevronDownIcon } from '../../shared/icons/ChevronDownIcon'
-import { AGENT_MODEL_DEFINITIONS, AgentModelName } from '../../shared/models'
+import {
+	TldrawUiButton, TldrawUiButtonIcon, TldrawUiButtonLabel,
+	TldrawUiDropdownMenuRoot, TldrawUiDropdownMenuTrigger, TldrawUiDropdownMenuContent,
+	TldrawUiMenuContextProvider, TldrawUiMenuItem, useValue,
+} from 'tldraw'
 import { useAgent } from '../agent/TldrawAgentAppProvider'
 import { ContextItemTag } from './ContextItemTag'
 import { SelectionTag } from './SelectionTag'
+import { AgentModelSettings } from './AgentModelSettings'
+import type { AgentStatus } from '../../shared/models'
+import { useAccessPolicy } from '../access/AccessPolicyContext'
 
-export function ChatInput({
-	handleSubmit,
-	inputRef,
-}: {
+export function ChatInput({ handleSubmit, inputRef, status }: {
 	handleSubmit: FormEventHandler<HTMLFormElement>
 	inputRef: React.RefObject<HTMLTextAreaElement | null>
+	status: AgentStatus
 }) {
 	const agent = useAgent()
+	const { policy } = useAccessPolicy()
 	const { editor } = agent
 	const [inputValue, setInputValue] = useState('')
 	const isGenerating = useValue('isGenerating', () => agent.requests.isGenerating(), [agent])
-
-	const isContextToolActive = useValue(
-		'isContextToolActive',
-		() => {
-			const tool = editor.getCurrentTool()
-			return tool.id === 'target-shape' || tool.id === 'target-area'
-		},
-		[editor]
-	)
-
 	const selectedShapes = useValue('selectedShapes', () => editor.getSelectedShapes(), [editor])
 	const contextItems = useValue('contextItems', () => agent.context.getItems(), [agent])
-	const modelName = useValue('modelName', () => agent.modelName.getModelName(), [agent])
+	const isContextToolActive = useValue('isContextToolActive', () =>
+		['target-shape', 'target-area'].includes(editor.getCurrentToolId()), [editor])
+	const stopping = isGenerating && inputValue === ''
 
 	return (
 		<div className="chat-input">
-			<form
-				onSubmit={(e) => {
-					e.preventDefault()
-					setInputValue('')
-					handleSubmit(e)
-				}}
-			>
-				<div className="prompt-tags">
-					<div className={'chat-context-select ' + (isContextToolActive ? 'active' : '')}>
-						<div className="chat-context-select-label">
-							<AtIcon /> Add Context
-						</div>
-						<select
-							id="chat-context-select"
-							value=" "
-							onChange={(e) => {
-								const action = ADD_CONTEXT_ACTIONS.find((action) => action.name === e.target.value)
-								if (action) action.onSelect(editor)
-							}}
-						>
-							{ADD_CONTEXT_ACTIONS.map((action) => {
-								return (
-									<option key={action.name} value={action.name}>
-										{action.name}
-									</option>
-								)
-							})}
-						</select>
-					</div>
+			<form onSubmit={(event) => {
+				event.preventDefault()
+				if (!inputValue.trim() && !isGenerating) return
+				handleSubmit(event)
+				setInputValue('')
+			}}>
+				{(selectedShapes.length > 0 || contextItems.length > 0) && <div className="prompt-tags">
 					{selectedShapes.length > 0 && <SelectionTag onClick={() => editor.selectNone()} />}
-					{contextItems.map((item, i) => (
-						<ContextItemTag
-							editor={editor}
-							onClick={() => agent.context.remove(item)}
-							key={'context-item-' + i}
-							item={item}
-						/>
-					))}
+					{contextItems.map((item, i) => <ContextItemTag editor={editor}
+						onClick={() => agent.context.remove(item)} key={'context-item-' + i} item={item} />)}
+				</div>}
+				<div className="chat-context-actions">
+					<TldrawUiDropdownMenuRoot id="agent-context">
+						<TldrawUiDropdownMenuTrigger>
+							<TldrawUiButton type="normal" isActive={isContextToolActive}>
+								<TldrawUiButtonIcon icon="plus" small />
+								<TldrawUiButtonLabel>Add context</TldrawUiButtonLabel>
+							</TldrawUiButton>
+						</TldrawUiDropdownMenuTrigger>
+						<TldrawUiDropdownMenuContent side="top" alignOffset={0}>
+							<TldrawUiMenuContextProvider type="menu" sourceId="dialog">
+								<TldrawUiMenuItem id="agent-pick-shapes" label="Pick shapes" iconLeft="tool-pointer"
+									onSelect={() => { editor.setCurrentTool('target-shape'); editor.focus() }} />
+								<TldrawUiMenuItem id="agent-pick-area" label="Pick an area" iconLeft="tool-frame"
+									onSelect={() => { editor.setCurrentTool('target-area'); editor.focus() }} />
+							</TldrawUiMenuContextProvider>
+						</TldrawUiDropdownMenuContent>
+					</TldrawUiDropdownMenuRoot>
 				</div>
-
-				<textarea
-					ref={inputRef}
-					name="input"
-					autoComplete="off"
-					placeholder="Ask, learn, brainstorm, draw"
-					value={inputValue}
-					onInput={(e) => setInputValue(e.currentTarget.value)}
-					onKeyDown={(e) => {
-						if (e.key === 'Enter' && !e.shiftKey) {
-							e.preventDefault()
-							//idk about this but it works oops -max
-							const form = e.currentTarget.closest('form')
-							if (form) {
-								const submitEvent = new Event('submit', { bubbles: true, cancelable: true })
-								form.dispatchEvent(submitEvent)
-							}
+				<textarea ref={inputRef} name="input" aria-label="Message Canvas AI" autoComplete="off"
+					placeholder={policy.ai === 'analyze' ? 'Ask for analysis of your canvas or connected data…' : 'Ask about your canvas, or describe a change…'} value={inputValue}
+					onChange={(event) => setInputValue(event.currentTarget.value)}
+					onKeyDown={(event) => {
+						if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
+							event.preventDefault()
+							event.currentTarget.form?.requestSubmit()
 						}
-					}}
-				/>
-				<span className="chat-actions">
-					<div className="chat-actions-left">
-						<div className="chat-model-select">
-							<div className="chat-model-select-label">
-								<BrainIcon /> {modelName}
-							</div>
-							<select
-								value={modelName}
-								onChange={(e) => agent.modelName.setModelName(e.target.value as AgentModelName)}
-							>
-								{Object.values(AGENT_MODEL_DEFINITIONS).map((model) => (
-									<option key={model.name} value={model.name}>
-										{model.name}
-									</option>
-								))}
-							</select>
-							<ChevronDownIcon />
-						</div>
-					</div>
-					<button className="chat-input-submit" disabled={inputValue === '' && !isGenerating}>
-						{isGenerating && inputValue === '' ? '◼' : '⬆'}
-					</button>
-				</span>
+					}} />
+				<div className="chat-actions">
+					<AgentModelSettings status={status} />
+					<TldrawUiButton type="primary" htmlButtonType="submit" className="chat-send"
+						aria-label={stopping ? 'Stop generating' : 'Send message'}
+						title={stopping ? 'Stop generating' : 'Send message'} disabled={!inputValue.trim() && !isGenerating}>
+						<TldrawUiButtonIcon icon={stopping ? 'geo-rectangle' : 'arrow-left'} />
+					</TldrawUiButton>
+				</div>
 			</form>
 		</div>
 	)
 }
-
-const ADD_CONTEXT_ACTIONS = [
-	{
-		name: 'Pick Shapes',
-		onSelect: (editor: Editor) => {
-			editor.setCurrentTool('target-shape')
-			editor.focus()
-		},
-	},
-	{
-		name: 'Pick Area',
-		onSelect: (editor: Editor) => {
-			editor.setCurrentTool('target-area')
-			editor.focus()
-		},
-	},
-	{
-		name: ' ',
-		onSelect: (editor: Editor) => {
-			const currentTool = editor.getCurrentTool()
-			if (currentTool.id === 'target-area' || currentTool.id === 'target-shape') {
-				editor.setCurrentTool('select')
-			}
-		},
-	},
-]

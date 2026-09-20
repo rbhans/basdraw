@@ -17,7 +17,7 @@ export const ModePartUtil = registerPromptPartUtil(
 				type: 'mode',
 				modeType: modeDefinition.type,
 				partTypes: modeDefinition.parts,
-				actionTypes: modeDefinition.actions,
+				actionTypes: this.agent.getAvailableActionTypes(),
 			}
 		}
 	}

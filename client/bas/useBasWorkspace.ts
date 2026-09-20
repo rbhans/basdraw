@@ -25,7 +25,7 @@ import {
 
 export type ConnectionStatus = 'disconnected' | 'connecting' | 'connected' | 'error'
 
-export function useBasWorkspace(editor: Editor | null, widgetPointReferences: string[] = [], pageShapeIds: string[] = []) {
+export function useBasWorkspace(editor: Editor | null, widgetPointReferences: string[] = [], pageShapeIds: string[] = [], connectionEnabled = true) {
 	const [document, setDocument] = useState(loadCanvasDocument)
 	const [profiles, setProfiles] = useState(loadConnectionProfiles)
 	const [status, setStatus] = useState<ConnectionStatus>('disconnected')
@@ -88,6 +88,7 @@ export function useBasWorkspace(editor: Editor | null, widgetPointReferences: st
 	}, [capabilities?.subscriptions?.viewGroups])
 
 	const connect = useCallback(async (input: ConnectionInput) => {
+		if (!connectionEnabled) throw new Error('The Niagara via baskStream add-on is disabled.')
 		disconnect()
 		setStatus('connecting')
 		setError(null)
@@ -142,7 +143,11 @@ export function useBasWorkspace(editor: Editor | null, widgetPointReferences: st
 			setError(message)
 			throw cause
 		}
-	}, [disconnect, dispatchDocument, ingestSnapshots])
+	}, [connectionEnabled, disconnect, dispatchDocument, ingestSnapshots])
+
+	useEffect(() => {
+		if (!connectionEnabled) disconnect()
+	}, [connectionEnabled, disconnect])
 
 	const removeProfile = useCallback((alias: string) => {
 		removeConnectionProfile(alias)
@@ -192,13 +197,24 @@ export function useBasWorkspace(editor: Editor | null, widgetPointReferences: st
 		}
 	}, [ingestSnapshots, request])
 
-	const readPoint = useCallback(async (node: StationNode) => {
+	const readPoints = useCallback(async (pointReferences: string[]) => {
 		const client = clientRef.current
-		const response = await request('read', { points: [node.slotPath || node.ord], fields: ['value', 'displayValue', 'status', 'timestamp', 'type'] })
-		if (client !== clientRef.current) throw new Error('The station connection changed. Choose the point again.')
+		const uniquePoints = [...new Set(pointReferences.map((point) => point.trim()).filter(Boolean))]
+		if (uniquePoints.length === 0) return []
+		if (uniquePoints.length > 100) throw new Error('Read requests are limited to 100 points at a time.')
+		const response = await request('read', {
+			points: uniquePoints,
+			fields: ['value', 'displayValue', 'status', 'timestamp', 'type'],
+		})
+		if (client !== clientRef.current) throw new Error('The station connection changed during the read.')
 		ingestSnapshots(response.points)
-		return Array.isArray(response.points) ? response.points[0] as PointSnapshot | undefined : undefined
+		return Array.isArray(response.points) ? response.points as PointSnapshot[] : []
 	}, [request, ingestSnapshots])
+
+	const readPoint = useCallback(async (node: StationNode) => {
+		const points = await readPoints([node.slotPath || node.ord])
+		return points[0]
+	}, [readPoints])
 
 	const createBinding = useCallback((shapeId: string, runtimeProperty: RuntimeProperty, mapping: BindingValueMapping, options?: BindingOptions, point?: StationNode, name?: string) => {
 		const source = point || selectedPoint
@@ -363,6 +379,7 @@ export function useBasWorkspace(editor: Editor | null, widgetPointReferences: st
 		profiles,
 		removeBinding,
 		readPoint,
+		readPoints,
 		setBindingEnabled,
 		removeProfile,
 		search,

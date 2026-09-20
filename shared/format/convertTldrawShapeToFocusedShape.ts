@@ -246,12 +246,35 @@ function convertUnknownShapeToFocused(editor: Editor, shape: TLShape): FocusedUn
 	const bounds = getSimpleBounds(editor, shape)
 	return {
 		_type: 'unknown',
+		h: bounds.h,
+		name: typeof shape.meta.basName === 'string' ? shape.meta.basName : undefined,
 		note: (shape.meta.note as string) ?? '',
+		props: boundedJsonObject(shape.props),
+		rotation: shape.rotation,
 		shapeId: convertTldrawIdToSimpleId(shape.id),
 		subType: shape.type,
+		w: bounds.w,
 		x: bounds.x,
 		y: bounds.y,
 	}
+}
+
+function boundedJsonObject(value: object): Record<string, any> {
+	const result = boundedJson(value, 0)
+	return result && typeof result === 'object' && !Array.isArray(result) ? result as Record<string, any> : {}
+}
+
+function boundedJson(value: unknown, depth: number): any {
+	if (value === null || typeof value === 'boolean' || typeof value === 'number') return value
+	if (typeof value === 'string') return value.length > 2_000 ? `${value.slice(0, 2_000)}…` : value
+	if (depth >= 4) return '[nested value omitted]'
+	if (Array.isArray(value)) return value.slice(0, 50).map((item) => boundedJson(item, depth + 1))
+	if (typeof value === 'object') {
+		const output: Record<string, any> = {}
+		for (const [key, item] of Object.entries(value).slice(0, 50)) output[key] = boundedJson(item, depth + 1)
+		return output
+	}
+	return String(value)
 }
 
 function getSimpleBounds(editor: Editor, shape: TLShape): Box {

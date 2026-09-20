@@ -7,6 +7,15 @@ preview_urls = true
 [observability]
 enabled = true
 
+[[d1_databases]]
+binding = "KNOWLEDGE_DB"
+database_name = "basdraw-knowledge"
+# Local development uses an isolated SQLite-backed D1 database. Replace this
+# placeholder with the id from `wrangler d1 create basdraw-knowledge` before deployment.
+database_id = "00000000-0000-0000-0000-000000000001"
+preview_database_id = "basdraw-knowledge-local"
+migrations_dir = "migrations"
+
 [[routes]]
 pattern = "agent.templates.tldraw.dev"
 custom_domain = true

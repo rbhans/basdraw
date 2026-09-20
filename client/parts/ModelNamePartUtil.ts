@@ -11,6 +11,7 @@ export const ModelNamePartUtil = registerPromptPartUtil(
 			return {
 				type: 'modelName',
 				modelName: this.agent.modelName.getModelName() ?? DEFAULT_MODEL_NAME,
+				reasoningEffort: this.agent.modelName.getReasoningEffort(),
 			}
 		}
 	}

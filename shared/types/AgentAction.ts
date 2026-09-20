@@ -93,6 +93,7 @@ export function hasActionSchema(type: string): boolean {
 // ============================================================================
 
 import type { SystemPromptCategory } from './SystemPromptCategory'
+import type { AgentActionAccess } from '../access'
 
 /**
  * Metadata that can be attached to action schemas via .meta().
@@ -101,6 +102,8 @@ export interface ActionMeta {
 	title?: string
 	description?: string
 	_systemPromptCategory?: SystemPromptCategory
+	/** Access requirement. Missing metadata fails closed to canvas-write. */
+	_access?: AgentActionAccess
 }
 
 /**
@@ -110,4 +113,8 @@ export function getActionMeta(type: AgentAction['_type']): ActionMeta | undefine
 	const schema = getActionSchema(type)
 	if (!schema) return undefined
 	return schema.meta() as ActionMeta | undefined
+}
+
+export function getActionAccess(type: AgentAction['_type']): AgentActionAccess {
+	return getActionMeta(type)?._access ?? 'canvas-write'
 }

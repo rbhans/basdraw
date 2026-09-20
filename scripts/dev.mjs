@@ -10,6 +10,10 @@ const children = [
 		cwd: root,
 		stdio: 'inherit',
 	}),
+	spawn(process.execPath, [path.join(root, 'scripts', 'codex-subscription-bridge.mjs')], {
+		cwd: root,
+		stdio: 'inherit',
+	}),
 	spawn(vite, ['--host', '127.0.0.1'], { cwd: root, stdio: 'inherit' }),
 ]
 

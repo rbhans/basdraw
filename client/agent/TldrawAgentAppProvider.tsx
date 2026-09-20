@@ -2,11 +2,13 @@ import { createContext, memo, ReactNode, useCallback, useContext, useEffect, use
 import { useEditor, useToasts, useValue } from 'tldraw'
 import { TldrawAgent } from './TldrawAgent'
 import { TldrawAgentApp } from './TldrawAgentApp'
+import type { BasdrawAccessPolicy } from '../../shared/access'
 
 const TldrawAgentAppContext = createContext<TldrawAgentApp | null>(null)
 
 export interface TldrawAgentAppProviderProps {
 	children?: ReactNode
+	accessPolicy: BasdrawAccessPolicy
 	/**
 	 * Callback fired when the app is created. Use this to pass the app
 	 * to components outside the Tldraw component via TldrawAgentAppContextProvider.
@@ -53,6 +55,7 @@ export interface TldrawAgentAppProviderProps {
  */
 export const TldrawAgentAppProvider = memo(function TldrawAgentAppProvider({
 	children,
+	accessPolicy,
 	onMount,
 	onUnmount,
 }: TldrawAgentAppProviderProps) {
@@ -76,7 +79,7 @@ export const TldrawAgentAppProvider = memo(function TldrawAgentAppProvider({
 
 	// Create the TldrawAgentApp instance
 	useEffect(() => {
-		const instance = new TldrawAgentApp(editor, { onError: handleError })
+		const instance = new TldrawAgentApp(editor, { onError: handleError, accessPolicy })
 
 		// Load persisted state first (this will create agents from persisted data)
 		instance.persistence.loadState()
@@ -106,6 +109,10 @@ export const TldrawAgentAppProvider = memo(function TldrawAgentAppProvider({
 			delete (window as any).editor
 		}
 	}, [editor, handleError, onMount, onUnmount])
+
+	useEffect(() => {
+		app?.setAccessPolicy(accessPolicy)
+	}, [accessPolicy, app])
 
 	// Don't render children until app exists
 	if (!app) {

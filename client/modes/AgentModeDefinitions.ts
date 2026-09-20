@@ -7,6 +7,9 @@ import { BringToFrontActionUtil } from '../actions/BringToFrontActionUtil'
 import { ClearActionUtil } from '../actions/ClearActionUtil'
 import { CountryInfoActionUtil } from '../actions/CountryInfoActionUtil'
 import { CountShapesActionUtil } from '../actions/CountShapesActionUtil'
+import { ConnectionToolActionUtil } from '../actions/ConnectionToolActionUtil'
+import { KnowledgeActionUtil } from '../actions/KnowledgeActionUtil'
+import { PluginContentActionUtil } from '../actions/PluginContentActionUtil'
 import { CreateActionUtil } from '../actions/CreateActionUtil'
 import { DeleteActionUtil } from '../actions/DeleteActionUtil'
 import { DistributeActionUtil } from '../actions/DistributeActionUtil'
@@ -35,6 +38,10 @@ import { DataPartUtil } from '../parts/DataPartUtil'
 import { DebugPartUtil } from '../parts/DebugPartUtil'
 import { MessagesPartUtil } from '../parts/MessagesPartUtil'
 import { ModelNamePartUtil } from '../parts/ModelNamePartUtil'
+import { KnowledgeScopePartUtil } from '../parts/KnowledgeScopePartUtil'
+import { ConnectionsPartUtil } from '../parts/ConnectionsPartUtil'
+import { AccessPolicyPartUtil } from '../parts/AccessPolicyPartUtil'
+import { PluginCapabilitiesPartUtil } from '../parts/PluginCapabilitiesPartUtil'
 import { ModePartUtil } from '../parts/ModePartUtil'
 import { PeripheralShapesPartUtil } from '../parts/PeripheralShapesPartUtil'
 import { ScreenshotPartUtil } from '../parts/ScreenshotPartUtil'
@@ -93,12 +100,16 @@ export const AGENT_MODE_DEFINITIONS = [
 		parts: [
 			// Mode (sends metadata to worker)
 			ModePartUtil.type,
+			AccessPolicyPartUtil.type,
 
 			// Debug (sends debug flags to worker)
 			DebugPartUtil.type,
 
 			// Model
 			ModelNamePartUtil.type,
+			KnowledgeScopePartUtil.type,
+			ConnectionsPartUtil.type,
+			PluginCapabilitiesPartUtil.type,
 
 			// Request
 			MessagesPartUtil.type,
@@ -165,6 +176,9 @@ export const AGENT_MODE_DEFINITIONS = [
 			// External APIs
 			CountryInfoActionUtil.type,
 			CountShapesActionUtil.type,
+			ConnectionToolActionUtil.type,
+			KnowledgeActionUtil.type,
+			PluginContentActionUtil.type,
 
 			// Internal (required)
 			UnknownActionUtil.type,

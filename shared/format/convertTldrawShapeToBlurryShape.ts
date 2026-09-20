@@ -27,6 +27,7 @@ export function convertTldrawShapeToBlurryShape(
 		w: Math.round(bounds.w),
 		h: Math.round(bounds.h),
 		type: shapeType as FocusedShape['_type'],
+		subType: shapeType === 'unknown' ? shape.type : undefined,
 		shapeId: convertTldrawIdToSimpleId(shape.id),
 		text,
 	}

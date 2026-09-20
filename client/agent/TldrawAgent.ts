@@ -1,7 +1,8 @@
 import { Editor, RecordsDiff, reverseRecordsDiff, structuredClone, TLRecord } from 'tldraw'
+import { allowsAgentAction, type BasdrawAccessPolicy } from '../../shared/access'
 import { convertTldrawShapeToFocusedShape } from '../../shared/format/convertTldrawShapeToFocusedShape'
-import { AgentModelName } from '../../shared/models'
-import { AgentAction } from '../../shared/types/AgentAction'
+import { AgentModelName, AgentReasoningEffort } from '../../shared/models'
+import { AgentAction, getActionAccess } from '../../shared/types/AgentAction'
 import { AgentInput } from '../../shared/types/AgentInput'
 import { AgentPrompt, BaseAgentPrompt } from '../../shared/types/AgentPrompt'
 import { AgentRequest } from '../../shared/types/AgentRequest'
@@ -25,6 +26,8 @@ import { AgentModeManager } from './managers/AgentModeManager'
 import { AgentRequestManager } from './managers/AgentRequestManager'
 import { AgentTodoManager } from './managers/AgentTodoManager'
 import { AgentUserActionTracker } from './managers/AgentUserActionTracker'
+import { agentPluginRuntime } from '../plugins/AgentPluginRuntime'
+import { connectionApprovalRuntime } from '../connections/ConnectionApprovalRuntime'
 
 /**
  * The persisted state of an agent.
@@ -36,6 +39,7 @@ export interface PersistedAgentState {
 	todoList?: TodoItem[]
 	contextItems?: ContextItem[]
 	modelName?: AgentModelName
+	reasoningEffort?: AgentReasoningEffort
 	debugFlags?: AgentDebugFlags
 }
 
@@ -46,6 +50,7 @@ export interface TldrawAgentOptions {
 	id: string
 	/** A callback for when an error occurs. */
 	onError: (e: any) => void
+	accessPolicy: BasdrawAccessPolicy
 }
 
 /**
@@ -68,6 +73,8 @@ export class TldrawAgent {
 
 	/** A callback for when an error occurs. */
 	onError: (e: any) => void
+
+	private accessPolicy: BasdrawAccessPolicy
 
 	// ==================== Managers ====================
 
@@ -125,10 +132,11 @@ export class TldrawAgent {
 	/**
 	 * Create a new tldraw agent.
 	 */
-	constructor({ editor, id, onError }: TldrawAgentOptions) {
+	constructor({ editor, id, onError, accessPolicy }: TldrawAgentOptions) {
 		this.editor = editor
 		this.id = id
 		this.onError = onError
+		this.accessPolicy = accessPolicy
 
 		// Initialize managers
 		// Note: mode must be initialized before actions, since actions depends on mode
@@ -166,6 +174,7 @@ export class TldrawAgent {
 			todoList: this.todos.getTodos(),
 			contextItems: this.context.getItems(),
 			modelName: this.modelName.getModelName(),
+			reasoningEffort: this.modelName.getReasoningEffort(),
 			debugFlags: this.debug.getDebugFlags(),
 		}
 	}
@@ -191,6 +200,9 @@ export class TldrawAgent {
 		}
 		if (state.modelName) {
 			this.modelName.setModelName(state.modelName)
+		}
+		if (state.reasoningEffort) {
+			this.modelName.setReasoningEffort(state.reasoningEffort)
 		}
 		if (state.debugFlags) {
 			this.debug.setDebugFlags(state.debugFlags)
@@ -241,6 +253,25 @@ export class TldrawAgent {
 	 */
 	setIsActingOnEditor(value: boolean): void {
 		this.isActingOnEditor = value
+	}
+
+	getAccessPolicy() { return this.accessPolicy }
+
+	setAccessPolicy(policy: BasdrawAccessPolicy) {
+		const previous = this.accessPolicy
+		this.accessPolicy = policy
+		if (policy.connections !== 'write') connectionApprovalRuntime.cancelOwner(this.id)
+		if (this.requests?.isGenerating() && previous.profileId !== policy.profileId) this.cancel()
+	}
+
+	getAvailableActionTypes(): AgentAction['_type'][] {
+		const definition = this.mode.getCurrentModeDefinition()
+		if (!definition.active) return []
+		return (definition.actions as readonly AgentAction['_type'][]).filter((type) => {
+			if (!allowsAgentAction(this.accessPolicy, getActionAccess(type))) return false
+			if (type === 'pluginContent' && !agentPluginRuntime.hasCapabilities()) return false
+			return true
+		})
 	}
 
 	// ==================== Request Handling ====================
@@ -513,6 +544,7 @@ export class TldrawAgent {
 	 * Cancel the agent's current prompt, if one is active.
 	 */
 	cancel() {
+		connectionApprovalRuntime.cancelOwner(this.id)
 		const activeRequest = this.requests.getActiveRequest()
 
 		if (activeRequest) {
@@ -586,7 +618,7 @@ export class TldrawAgent {
 			)
 		}
 
-		const availableActions = modeDefinition.actions
+		const availableActions = this.getAvailableActionTypes()
 
 		const requestPromise = (async () => {
 			const prompt = await this.preparePrompt(request, helpers)

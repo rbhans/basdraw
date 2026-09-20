@@ -77,6 +77,7 @@ export const CountShapesAction = z
 	})
 	.meta({
 		title: 'Count',
+		_access: 'analysis',
 		description:
 			'The AI requests to count the number of shapes in the canvas. The answer will be provided to the AI in a follow-up request.',
 	})
@@ -91,11 +92,62 @@ export const CountryInfoAction = z
 	})
 	.meta({
 		title: 'Country info',
+		_access: 'analysis',
 		description:
 			'The AI gets information about a country by providing its country code, eg: "de" for Germany.',
 	})
 
 export type CountryInfoAction = z.infer<typeof CountryInfoAction>
+
+// Connection Tool Action
+export const ConnectionToolAction = z
+	.object({
+		_type: z.literal('connectionTool'),
+		connectionId: z.string(),
+		toolId: z.string(),
+		arguments: z.record(z.string(), z.json()).optional(),
+	})
+	.meta({
+		title: 'Use connection tool',
+		_access: 'connection',
+		description:
+			'Calls one of the currently available external connection tools. Only use a connectionId and toolId listed in the connection context. The result will be returned in a follow-up turn.',
+	})
+
+export type ConnectionToolAction = z.infer<typeof ConnectionToolAction>
+
+export const KnowledgeAction = z.object({
+	_type: z.literal('knowledge'),
+	operation: z.enum(['catalog', 'loadSkill', 'getReference', 'search']),
+	id: z.string().max(120).optional(),
+	query: z.string().max(300).optional(),
+	projectOnly: z.boolean().optional(),
+	offset: z.number().int().min(0).max(1_000_000).optional(),
+}).meta({
+	title: 'Read skills and project knowledge',
+	_access: 'analysis',
+	description: 'Load a skill, read a reference, search relevant knowledge or page the catalog. Results arrive in a follow-up turn; stop and wait before dependent actions. Use nextOffset to read remaining pages. projectOnly searches only the active project. Scope is supplied by the app, never choose another project.',
+})
+export type KnowledgeAction = z.infer<typeof KnowledgeAction>
+
+// Plugin content action. Enabled plugins describe and execute their own bounded
+// canvas operations through the client-side plugin runtime.
+export const PluginContentAction = z.object({
+	_type: z.literal('pluginContent'),
+	pluginId: z.string().max(120),
+	capabilityId: z.string().max(120),
+	operation: z.enum(['create', 'update', 'delete']),
+	shapeId: SimpleShapeIdSchema.optional(),
+	x: z.number().optional(),
+	y: z.number().optional(),
+	arguments: z.record(z.string(), z.json()).optional(),
+	intent: z.string(),
+}).meta({
+	title: 'Use a basdraw canvas capability',
+	description: 'Create or edit native content supplied by an enabled basdraw plugin. Use only capabilities and operations listed in the plugin capability context.',
+	_access: 'canvas-write',
+})
+export type PluginContentAction = z.infer<typeof PluginContentAction>
 
 // Create Action
 export const CreateAction = z
@@ -157,7 +209,7 @@ export const MessageAction = z
 		_type: z.literal('message'),
 		text: z.string(),
 	})
-	.meta({ title: 'Message', description: 'The AI sends a message to the user.' })
+	.meta({ title: 'Message', description: 'The AI sends a message to the user.', _access: 'analysis' })
 
 export type MessageAction = z.infer<typeof MessageAction>
 
@@ -256,6 +308,7 @@ export const ReviewAction = z
 	})
 	.meta({
 		title: 'Review',
+		_access: 'analysis',
 		description:
 			'The AI schedules further work or a review so that it can look at the results of its work so far and take further action, such as reviewing what it has done or taking further steps that would benefit from seeing the results of its work so far.',
 	})
@@ -309,6 +362,7 @@ export const SetMyViewAction = z
 	})
 	.meta({
 		title: 'Set My View',
+		_access: 'analysis',
 		description:
 			'The AI changes the bounds of its own viewport to navigate to other areas of the canvas if needed. `x` and `y` are the top-left corner of the area you want to see, and `w` and `h` are its width and height. To center your view on a point, set `x` and `y` to that point minus half the width and height.',
 	})
@@ -339,7 +393,7 @@ export const ThinkAction = z
 		_type: z.literal('think'),
 		text: z.string(),
 	})
-	.meta({ title: 'Think', description: 'The AI describes its intent or reasoning.' })
+	.meta({ title: 'Think', description: 'The AI describes its intent or reasoning.', _access: 'analysis' })
 
 export type ThinkAction = z.infer<typeof ThinkAction>
 
@@ -353,6 +407,7 @@ export const UpsertPersonalTodoItemAction = z
 	})
 	.meta({
 		title: 'Update Todo List',
+		_access: 'analysis',
 		description: 'The AI updates a current todo list item or creates a new one',
 	})
 
@@ -379,6 +434,7 @@ export const UnknownAction = z
 	})
 	.meta({
 		title: 'Unknown',
+		_access: 'analysis',
 		description: 'An action with an unknown or unrecognized type.',
 	})
 

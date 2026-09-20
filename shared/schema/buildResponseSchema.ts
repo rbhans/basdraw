@@ -7,6 +7,7 @@ import { ActionMeta, AgentAction, getActionSchemaForMode } from '../types/AgentA
  */
 const INTERNAL_META_KEYS: Set<string> = new Set([
 	'_systemPromptCategory',
+	'_access',
 ] satisfies (keyof ActionMeta)[])
 
 /**

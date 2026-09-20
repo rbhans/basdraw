@@ -1,6 +1,7 @@
 import { Editor } from 'tldraw'
 import { AgentAppAgentsManager } from './managers/AgentAppAgentsManager'
 import { AgentAppPersistenceManager } from './managers/AgentAppPersistenceManager'
+import type { BasdrawAccessPolicy } from '../../shared/access'
 
 /**
  * The TldrawAgentApp class manages the agent system for a given editor instance.
@@ -52,6 +53,7 @@ export class TldrawAgentApp {
 		editor: Editor,
 		public options: {
 			onError: (e: any) => void
+			accessPolicy: BasdrawAccessPolicy
 		}
 	) {
 		this._editor = editor
@@ -59,6 +61,11 @@ export class TldrawAgentApp {
 		this.persistence = new AgentAppPersistenceManager(this)
 		editor.on('crash', this.handleCrash)
 		editor.on('dispose', this.handleDispose)
+	}
+
+	setAccessPolicy(policy: BasdrawAccessPolicy) {
+		this.options.accessPolicy = policy
+		for (const agent of this.agents.getAgents()) agent.setAccessPolicy(policy)
 	}
 
 	/**

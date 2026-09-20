@@ -1,5 +1,12 @@
 import { Atom, atom } from 'tldraw'
-import { AgentModelName, DEFAULT_MODEL_NAME, isValidModelName } from '../../../shared/models'
+import {
+	AgentModelName,
+	AgentReasoningEffort,
+	DEFAULT_MODEL_NAME,
+	DEFAULT_REASONING_EFFORT,
+	isReasoningEffort,
+	isValidModelName,
+} from '../../../shared/models'
 import type { TldrawAgent } from '../TldrawAgent'
 import { BaseAgentManager } from './BaseAgentManager'
 
@@ -16,6 +23,7 @@ export class AgentModelNameManager extends BaseAgentManager {
 	 * ModelNamePartUtil for an example.
 	 */
 	private $modelName: Atom<AgentModelName>
+	private $reasoningEffort: Atom<AgentReasoningEffort>
 
 	/**
 	 * Creates a new model name manager for the given agent.
@@ -24,6 +32,7 @@ export class AgentModelNameManager extends BaseAgentManager {
 	constructor(agent: TldrawAgent) {
 		super(agent)
 		this.$modelName = atom<AgentModelName>('modelName', DEFAULT_MODEL_NAME)
+		this.$reasoningEffort = atom<AgentReasoningEffort>('reasoningEffort', DEFAULT_REASONING_EFFORT)
 	}
 
 	/**
@@ -45,11 +54,20 @@ export class AgentModelNameManager extends BaseAgentManager {
 		this.$modelName.set(isValidModelName(modelName) ? modelName : DEFAULT_MODEL_NAME)
 	}
 
+	getReasoningEffort(): AgentReasoningEffort {
+		return this.$reasoningEffort.get()
+	}
+
+	setReasoningEffort(effort: AgentReasoningEffort): void {
+		this.$reasoningEffort.set(isReasoningEffort(effort) ? effort : DEFAULT_REASONING_EFFORT)
+	}
+
 	/**
 	 * Reset the model name manager to its initial state.
 	 * Sets the model name back to the default.
 	 */
 	reset(): void {
 		this.$modelName.set(DEFAULT_MODEL_NAME)
+		this.$reasoningEffort.set(DEFAULT_REASONING_EFFORT)
 	}
 }

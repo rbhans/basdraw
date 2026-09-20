@@ -1,10 +1,13 @@
 import { FormEventHandler, useCallback, useRef } from 'react'
+import { TldrawUiButton, TldrawUiButtonIcon } from 'tldraw'
 import { useAgent } from '../agent/TldrawAgentAppProvider'
 import { ChatHistory } from './chat-history/ChatHistory'
 import { ChatInput } from './ChatInput'
 import { TodoList } from './TodoList'
+import type { AgentStatus } from '../../shared/models'
+import { ConnectionApprovals } from '../connections/ConnectionApprovals'
 
-export function ChatPanel() {
+export function ChatPanel({ status, onClose }: { status: AgentStatus; onClose: () => void }) {
 	const agent = useAgent()
 	const inputRef = useRef<HTMLTextAreaElement>(null)
 
@@ -42,17 +45,32 @@ export function ChatPanel() {
 	}, [agent])
 
 	return (
-		<div className="chat-panel">
+		<aside className="chat-panel" aria-label="Canvas AI">
 			<div className="chat-header">
-				<button className="new-chat-button" onClick={handleNewChat}>
-					+
-				</button>
+				<div className="chat-header-title">
+					<strong>Canvas AI</strong>
+					{status.providers.codex && (
+						<span className="agent-subscription-badge">
+							<span className="agent-subscription-dot" />
+							ChatGPT connected
+						</span>
+					)}
+				</div>
+				<div className="chat-header-actions">
+					<TldrawUiButton type="icon" aria-label="Start a new chat" tooltip="New chat" onClick={handleNewChat}>
+						<TldrawUiButtonIcon icon="plus" small />
+					</TldrawUiButton>
+					<TldrawUiButton type="icon" aria-label="Close Canvas AI" tooltip="Close" onClick={onClose}>
+						<TldrawUiButtonIcon icon="cross-2" small />
+					</TldrawUiButton>
+				</div>
 			</div>
 			<ChatHistory agent={agent} />
 			<div className="chat-input-container">
+				<ConnectionApprovals />
 				<TodoList agent={agent} />
-				<ChatInput handleSubmit={handleSubmit} inputRef={inputRef} />
+				<ChatInput handleSubmit={handleSubmit} inputRef={inputRef} status={status} />
 			</div>
-		</div>
+		</aside>
 	)
 }
