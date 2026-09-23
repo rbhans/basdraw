@@ -35,16 +35,22 @@ export function useRuntimeCycle(id: string | undefined, kind: RuntimeCycle, seco
 	useLayoutEffect(() => { subscription.current?.update(seconds) })
 }
 
-/** Values are painted imperatively; ticks never re-render React or write the store. */
-export function useRuntimeValues(values: RuntimeValues, paint: (values: RuntimeValues) => void) {
+/**
+ * Values are painted imperatively; ticks never re-render React or write the store.
+ * An inactive consumer paints its resting values once and holds no clock subscription,
+ * so unbound shapes can keep a stable wrapper without costing a tick listener.
+ */
+export function useRuntimeValues(values: RuntimeValues, paint: (values: RuntimeValues) => void, active = true) {
 	const editor = useEditor()
 	const callback = useRef(paint)
+	const latest = useRef(values)
 	const subscription = useRef<ReturnType<RuntimeAnimationController['subscribeValues']> | null>(null)
-	useLayoutEffect(() => { callback.current = paint })
+	useLayoutEffect(() => { callback.current = paint; latest.current = values })
 	useLayoutEffect(() => {
+		if (!active) { callback.current(latest.current); return }
 		const lease = acquire(editor)
-		subscription.current = lease.controller.subscribeValues(values, value => callback.current(value))
+		subscription.current = lease.controller.subscribeValues(latest.current, value => callback.current(value))
 		return () => { subscription.current?.dispose(); subscription.current = null; lease.release() }
-	}, [editor])
-	useLayoutEffect(() => { subscription.current?.update(values) })
+	}, [editor, active])
+	useLayoutEffect(() => { if (active) subscription.current?.update(values); else callback.current(values) })
 }

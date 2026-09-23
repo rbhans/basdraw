@@ -8,7 +8,8 @@ The saved drawing describes intent. Live point snapshots supply inputs. Runtime 
 - `runtimeMapping.ts` converts snapshots and binding configuration into target presentation. Keep this evaluation pure.
 - `RuntimeAnimationController.ts` owns time, numeric interpolation and continuous phase. It has no React, DOM or station dependency.
 - `runtimeAnimationHooks.ts` attaches one controller to each editor's `tick` event. Subscriptions release on unmount; the final subscriber releases the clock listener.
-- `RuntimeMotion.tsx` supplies HTML/SVG adapters for shared spin and travel cycles. Shape wrappers, fills and labels project presentation into their own coordinate systems.
+- `RuntimeMotion.tsx` supplies HTML/SVG adapters for shared spin and travel cycles. Shape wrappers, fills and labels project presentation into their own coordinate systems. The wrapper tree is fixed (one spin slot and two travel slots, x then y), so starting or stopping motion, gaining or losing bindings, or connecting and disconnecting only repaints and never remounts shape content such as Web View iframes or charts. Unbound shapes keep the wrapper without transforms or a clock subscription.
+- `pointSnapshotStore.ts` holds live values outside React state; `usePointSnapshots` subscribes a consumer to only the points it reads. `bindingScope.indexBindingsByShape` groups the active bindings by owner once per document change, and renderers look bindings up by shape instead of scanning the list.
 - `bindingScope.ts` resolves group inheritance, channel ownership and pivots.
 
 ## Timing contract
@@ -33,4 +34,4 @@ New shape libraries should use the same binding/runtime path. A future connectio
 
 Run `node --test scripts/runtime-animation.test.mjs` and `npm run validate`. The isolated `/scripts/behavior-qa.html` offers **Add motion fixture**, synthetic point changes and **Check saved geometry**; it has no saved canvas or station connection. `/scripts/canvas-regression.html` covers existing canvas contracts.
 
-This is a consistent extension boundary, not a large-drawing performance guarantee. Snapshot subscription indexing and representative many-shape benchmarks remain future work. Native selection bounds still reflect saved artwork; use Live effects off when arranging it.
+This is a consistent extension boundary, not a large-drawing performance guarantee. Per-point snapshot subscriptions and the bindings-by-shape index are in place (`node --test scripts/bas-runtime-store.test.mjs`); representative many-shape benchmarks remain future work. Native selection bounds still reflect saved artwork; use Live effects off when arranging it.

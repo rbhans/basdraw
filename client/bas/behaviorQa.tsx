@@ -1,5 +1,5 @@
 // Development-only integration surface. No saved store, credentials or station calls.
-import { useState } from 'react'
+import { useLayoutEffect, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import { Tldraw, createShapeId, type Editor } from 'tldraw'
 import '../index.css'
@@ -11,6 +11,8 @@ import { RuntimeShapeWrapper } from './RuntimeShapeWrapper'
 import { RuntimeBindingsOverlay } from './RuntimeBindingsOverlay'
 import { DataShapeStylePanel } from './DataShapeStylePanel'
 import { dispatchShapeBindingAction } from './shapeBindings'
+import { PointSnapshotStore } from './pointSnapshotStore'
+import { BasdrawPluginProvider } from '../plugins/PluginContext'
 import type { PointSnapshot, StationNode, ShapeBinding } from './types'
 
 const profile = { alias: 'fixture', name: 'Isolated fixture', stationUrl: '', username: '', tlsMode: 'strict' as const }
@@ -28,17 +30,19 @@ function Fixture() {
 	const [temperature, setTemperature] = useState(72.4)
 	const [proof, setProof] = useState('')
 	const workspace = useBasWorkspace(editor)
+	const [snapshotStore] = useState(() => new PointSnapshotStore())
 	const snapshots: Record<string, PointSnapshot> = {
 		'fixture:temperature': { point: 'fixture:temperature', value: temperature, displayValue: `${temperature} °F`, status: 'ok' },
 		'fixture:setpoint': { point: 'fixture:setpoint', value: 74, displayValue: '74 °F', status: 'override' },
 		'fixture:run': { point: 'fixture:run', value: run, status: 'ok' },
 	}
-	return <BasWorkspaceProvider workspace={{ ...workspace, connectedProfile: profile, status: 'connected', snapshots,
+	useLayoutEffect(() => { snapshotStore.ingest(Object.values(snapshots)) })
+	return <BasdrawPluginProvider><BasWorkspaceProvider workspace={{ ...workspace, connectedProfile: profile, status: 'connected', snapshotStore,
 		search: async (query) => points.filter((point) => point.display!.toLowerCase().includes(query.toLowerCase())),
 		browse: async () => points,
 		readPoint: async (point) => snapshots[point.ord],
 		createBinding: (owner, property, mapping, options, point, name) => editor && point ? dispatchShapeBindingAction(editor, { type: 'create_binding', binding: { id: crypto.randomUUID(), shapeId: owner, name, stationAlias: 'fixture', pointReference: point.ord, pointLabel: point.display!, runtimeProperty: property, mapping, options } }) : 'Select a fixture point.',
-	}}><PointDragProvider><BasRuntimeProvider value={{ document: workspace.document, snapshots, connected: true, stationAlias: 'fixture', historySeries: {}, loadHistory: async () => {} }}>
+	}}><PointDragProvider><BasRuntimeProvider value={{ document: workspace.document, snapshotStore, connected: true, stationAlias: 'fixture', historySeries: {}, loadHistory: async () => {} }}>
 		<div style={{ position: 'absolute', inset: 0 }}>
 			<div style={{ height: 60, padding: 8 }}>Isolated behavior QA · synthetic values · no saved drawing or station connection
 				<label> Temperature <input aria-label="Fixture temperature" type="number" value={temperature} onChange={(event) => setTemperature(Number(event.target.value))} /></label>
@@ -74,7 +78,7 @@ function Fixture() {
 				setEditor(mounted)
 			}} /></div>
 		</div>
-	</BasRuntimeProvider></PointDragProvider></BasWorkspaceProvider>
+	</BasRuntimeProvider></PointDragProvider></BasWorkspaceProvider></BasdrawPluginProvider>
 }
 
 if (import.meta.env.DEV) {

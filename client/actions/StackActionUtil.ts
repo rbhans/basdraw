@@ -18,7 +18,7 @@ export const StackActionUtil = registerActionUtil(
 		override sanitizeAction(action: Streaming<StackAction>, helpers: AgentHelpers) {
 			if (!action.complete) return action
 
-			action.shapeIds = helpers.ensureShapeIdsExist(action.shapeIds)
+			action.shapeIds = helpers.ensureShapeIdsAreEditable(action.shapeIds)
 
 			return action
 		}

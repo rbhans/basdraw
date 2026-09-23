@@ -1,6 +1,8 @@
 export interface Environment {
 	AGENT_DURABLE_OBJECT: DurableObjectNamespace
 	KNOWLEDGE_DB: D1Database
+	/** Bearer token for deployed (non-loopback) hosts. Legacy name: KNOWLEDGE_ADMIN_TOKEN. */
+	BASDRAW_API_TOKEN?: string
 	KNOWLEDGE_ADMIN_TOKEN?: string
 	OPENAI_API_KEY?: string
 	ANTHROPIC_API_KEY?: string

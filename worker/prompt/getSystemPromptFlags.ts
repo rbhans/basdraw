@@ -13,7 +13,6 @@ export function getSystemPromptFlags(actions: AgentAction['_type'][], parts: Pro
 		hasReview: actions.includes('review'),
 		hasSetMyView: actions.includes('setMyView'),
 		hasTodoList: actions.includes('update-todo-list') && parts.includes('todoList'),
-		hasAddDetail: actions.includes('add-detail'),
 
 		// Individual shapes
 		hasCreate: actions.includes('create'),

@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
 import { TldrawUiButton, TldrawUiButtonLabel, TldrawUiDialogHeader, TldrawUiDialogTitle, TldrawUiDialogCloseButton, TldrawUiDialogBody, TldrawUiDialogFooter, useDialogs, useEditor, type TLUiDialogProps } from 'tldraw'
 import { insertVectorPage, splitVectorPage, svgDataUrl, type VectorPage } from './vectorPdfImport'
+import { importDocument } from '../documents/documentRuntime'
+import { useBasdrawPlugins } from '../plugins/PluginContext'
 
 export function useVectorPdfDialog() {
 	const { addDialog } = useDialogs()
@@ -9,6 +11,7 @@ export function useVectorPdfDialog() {
 
 export function VectorPdfDialog({ onClose, initialFile }: TLUiDialogProps & { initialFile?: File }) {
 	const editor = useEditor()
+	const { isEnabled } = useBasdrawPlugins()
 	const [file, setFile] = useState<File | null>(initialFile || null)
 	const [pageNumber, setPageNumber] = useState(1)
 	const [pageCount, setPageCount] = useState<number | null>(null)
@@ -38,10 +41,16 @@ export function VectorPdfDialog({ onClose, initialFile }: TLUiDialogProps & { in
 		} catch (cause) { if (!controller.signal.aborted) setError(cause instanceof Error ? cause.message : 'PDF import failed.') }
 		finally { if (!controller.signal.aborted) setBusy(false) }
 	}
-	const insert = () => {
+	const insert = async () => {
 		if (!preview || !file || busy) return
-		try { insertVectorPage(editor, preview, `${file.name.replace(/\.pdf$/i, '')} · p${pageNumber}`); onClose(); editor.focus() }
-		catch (cause) { setError(cause instanceof Error ? cause.message : 'Could not import page.') }
+		setBusy(true); setError('')
+		try {
+			const { frame } = insertVectorPage(editor, preview, `${file.name.replace(/\.pdf$/i, '')} · p${pageNumber}`)
+			if (isEnabled('document-understanding')) await importDocument(editor, file, undefined, frame)
+			onClose(); editor.focus()
+		}
+		catch (cause) { setError(cause instanceof Error ? cause.message : 'Could not import page.'); setPreview(null) }
+		finally { setBusy(false) }
 	}
 	return <div className="data-setup-dialog bas-pdf-dialog">
 		<TldrawUiDialogHeader><TldrawUiDialogTitle>Import vector PDF</TldrawUiDialogTitle><TldrawUiDialogCloseButton /></TldrawUiDialogHeader>

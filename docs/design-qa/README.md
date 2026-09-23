@@ -5,9 +5,9 @@
 - User reference: `/var/folders/b_/t3m1lbpx5d5dzqv6pkfkhhn00000gn/T/codex-clipboard-58e70a98-5f01-40cc-bd2c-56648cb223e3.png`
 - Official tldraw sidebar asset: `https://github.com/tldraw/tldraw/blob/main/apps/dotcom/client/public/tldraw_sidebar_logo.svg`
 - Official tldraw renderer: `https://github.com/tldraw/tldraw/blob/main/apps/dotcom/client/src/tla/components/TlaLogo/TlaLogo.tsx`
-- Corrected light implementation: `/Users/benhansen/Projects/bas-whiteboard/design-qa-light-refined.jpg`
-- Corrected dark implementation: `/Users/benhansen/Projects/bas-whiteboard/design-qa-dark-refined.jpg`
-- Corrected focused header: `/Users/benhansen/Projects/bas-whiteboard/design-qa-light-header-refined.jpg`
+- Corrected light implementation: [design-qa-light-refined.jpg](design-qa-light-refined.jpg)
+- Corrected dark implementation: [design-qa-dark-refined.jpg](design-qa-dark-refined.jpg)
+- Corrected focused header: [design-qa-light-header-refined.jpg](design-qa-light-header-refined.jpg)
 - Browser: Codex in-app Browser
 - CSS viewport and implementation pixels: 1280 x 720 at 1x density
 - Reference pixels: 160 x 64

@@ -7,22 +7,39 @@ import {
 	TldrawUiInput,
 	useEditor,
 	useToasts,
+	useValue,
 	type Editor,
 	type JsonObject,
 	type JsonValue,
+	type TLArrowBinding,
 	type TLArrowShape,
 	type TLShape,
 	type TLShapeId,
 } from 'tldraw'
 import type { BasdrawAgentCanvasCapability } from '../plugins/types'
+import { shapeName } from '../bas/shapeIdentity'
 
-type BasRelationship = { kind: string; label: string; fromShapeId: string; toShapeId: string }
+/** Saved relationship metadata. Endpoints are not stored: they are the arrow's live tldraw bindings. */
+type BasRelationship = { kind: string; label: string }
+type RelationshipEndpoints = { fromShapeId: string | null; toShapeId: string | null }
 
 export function readRelationship(shape: TLShape): BasRelationship | null {
+	if (shape.type !== 'arrow') return null
 	const value = shape.meta.basRelationship
 	if (!value || typeof value !== 'object' || Array.isArray(value)) return null
-	if (typeof value.kind !== 'string' || typeof value.label !== 'string' || typeof value.fromShapeId !== 'string' || typeof value.toShapeId !== 'string') return null
-	return { kind: value.kind, label: value.label, fromShapeId: value.fromShapeId, toShapeId: value.toShapeId }
+	if (typeof value.kind !== 'string' || typeof value.label !== 'string') return null
+	// Older canvases also saved fromShapeId/toShapeId; they go stale after rebinding or duplicating and are ignored.
+	return { kind: value.kind, label: value.label }
+}
+
+/** Current endpoints from the arrow's native bindings, so rebinding, deleting or duplicating stays accurate. */
+export function relationshipEndpoints(editor: Pick<Editor, 'getBindingsFromShape'>, arrow: TLShape): RelationshipEndpoints {
+	const endpoints: RelationshipEndpoints = { fromShapeId: null, toShapeId: null }
+	for (const binding of editor.getBindingsFromShape<TLArrowBinding>(arrow, 'arrow')) {
+		if (binding.props.terminal === 'start') endpoints.fromShapeId = binding.toId
+		else if (binding.props.terminal === 'end') endpoints.toShapeId = binding.toId
+	}
+	return endpoints
 }
 
 export function createRelationship(editor: Editor, fromShapeId: string, toShapeId: string, kind = 'related', label = '') {
@@ -35,7 +52,7 @@ export function createRelationship(editor: Editor, fromShapeId: string, toShapeI
 	if (!start || !end) throw new Error('Both relationship shapes need visible bounds.')
 	const id = createShapeId()
 	const x = Math.min(start.x, end.x), y = Math.min(start.y, end.y)
-	const relation = normalizeRelationship({ kind, label, fromShapeId: from.id, toShapeId: to.id })
+	const relation = normalizeRelationship({ kind, label })
 	const defaults = editor.getShapeUtil<TLArrowShape>('arrow').getDefaultProps()
 	editor.markHistoryStoppingPoint('create relationship')
 	editor.createShape<TLArrowShape>({
@@ -56,6 +73,7 @@ export function updateRelationship(editor: Editor, shapeId: string, change: Part
 	if (shape.isLocked || editor.getShapeAncestors(shape).some((ancestor) => ancestor.isLocked) || editor.getIsReadonly()) throw new Error('Unlock the relationship to edit it.')
 	const next = normalizeRelationship({ ...current, ...change })
 	editor.markHistoryStoppingPoint('update relationship')
+	// Rewriting the metadata also drops legacy endpoint copies.
 	editor.updateShape<TLArrowShape>({ id: shape.id, type: 'arrow', props: { richText: toRichText(next.label) }, meta: { ...shape.meta, basRelationship: next } })
 	return shape.id
 }
@@ -77,6 +95,14 @@ export function useCreateRelationship() {
 export function RelationshipProperties({ shape }: { shape: TLShape }) {
 	const editor = useEditor()
 	const relation = readRelationship(shape)!
+	const endpoints = useValue('relationship endpoints', () => {
+		const current = relationshipEndpoints(editor, shape)
+		const name = (id: string | null) => {
+			const target = id && editor.getShape(id as TLShapeId)
+			return target ? shapeName(target) : 'Unconnected'
+		}
+		return `${name(current.fromShapeId)} → ${name(current.toShapeId)}`
+	}, [editor, shape])
 	const [kind, setKind] = useState(relation.kind)
 	const [label, setLabel] = useState(relation.label)
 	const [error, setError] = useState('')
@@ -90,7 +116,7 @@ export function RelationshipProperties({ shape }: { shape: TLShape }) {
 		<label><span>Type</span><TldrawUiInput value={kind} onValueChange={setKind} onComplete={save} disabled={locked} /></label>
 		<label><span>Label</span><TldrawUiInput value={label} onValueChange={setLabel} onComplete={save} disabled={locked} /></label>
 		<TldrawUiButton type="primary" disabled={locked || (kind === relation.kind && label === relation.label)} onClick={save}><TldrawUiButtonLabel>Save relationship</TldrawUiButtonLabel></TldrawUiButton>
-		<small>{simpleId(relation.fromShapeId)} → {simpleId(relation.toShapeId)}</small>
+		<small>{endpoints}</small>
 		{error && <small role="alert">{error}</small>}
 	</section>
 }
@@ -100,9 +126,11 @@ export const relationshipAgentCapabilities: readonly BasdrawAgentCanvasCapabilit
 	description: 'Connect two existing canvas items with a native bound tldraw arrow carrying relationship metadata.',
 	operations: ['create', 'update', 'delete'],
 	inputSchema: { fromShapeId: 'Required for create.', toShapeId: 'Required for create.', kind: 'Short relationship type such as feeds, controls, documents or related.', label: 'Optional visible arrow label.' },
-	inspect: (_editor, shape) => {
+	inspect: (editor, shape) => {
 		const relation = readRelationship(shape)
-		return relation ? relation as unknown as JsonValue : null
+		if (!relation) return null
+		const { fromShapeId, toShapeId } = relationshipEndpoints(editor, shape)
+		return { ...relation, fromShapeId: fromShapeId && simpleId(fromShapeId), toShapeId: toShapeId && simpleId(toShapeId) }
 	},
 	execute: ({ editor, operation, shapeId, arguments: args }) => {
 		if (operation === 'create') {

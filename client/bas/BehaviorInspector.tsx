@@ -6,6 +6,7 @@ import { unsupportedBindingCount } from './shapeBindings'
 import { BindingBuilder } from './BindingBuilder'
 import { BehaviorPointPicker } from './BehaviorPointPicker'
 import { usePointDrag, type DraggedPoint } from './PointDrag'
+import { usePointSnapshot } from './usePointSnapshots'
 import { NavigationBehavior } from './NavigationBehavior'
 import { shapeNavigation } from './shapeIdentity'
 import type { PointSnapshot, RuntimeProperty, ShapeBinding, StationNode } from './types'
@@ -94,7 +95,8 @@ function BehaviorEditor({ shape, property, binding, initialPoint, onDone }: { sh
 	const stationAlias = replacement?.stationAlias || binding?.stationAlias
 	const connected = Boolean(workspace.connectedProfile)
 	const sameStation = connected && workspace.connectedProfile?.alias === stationAlias
-	const snapshot = sameStation && pointReference ? workspace.snapshots[pointReference] || replacement?.snapshot : undefined
+	const liveSnapshot = usePointSnapshot(workspace.snapshotStore, sameStation ? pointReference : undefined)
+	const snapshot = sameStation && pointReference ? liveSnapshot || replacement?.snapshot : undefined
 	const ready = Boolean(binding || replacement)
 	const staleReplacement = Boolean(replacement && !sameStation)
 	return <div className="behavior-editor">

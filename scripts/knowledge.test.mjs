@@ -32,7 +32,7 @@ test('catalog excludes bodies, includes plugin version and does not require a da
 	await add('project-note')
 	const catalog = await service.catalog(scope)
 	assert.equal(catalog.entries.length, 3)
-	assert.equal(catalog.entries[0].version, '1.1.0')
+	assert.equal(catalog.entries[0].version, '1.2.0')
 	assert.equal(formatKnowledgeCatalog(catalog).includes('1234'), false)
 	assert.equal(JSON.stringify(catalog).includes('"content"'), false)
 	assert.match((await service.retrieve(scope, { operation: 'loadSkill', id: 'basdraw:baskstream-connection' })).content, /Discover incrementally/)

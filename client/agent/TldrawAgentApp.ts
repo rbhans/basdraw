@@ -2,6 +2,7 @@ import { Editor } from 'tldraw'
 import { AgentAppAgentsManager } from './managers/AgentAppAgentsManager'
 import { AgentAppPersistenceManager } from './managers/AgentAppPersistenceManager'
 import type { BasdrawAccessPolicy } from '../../shared/access'
+import type { TldrawAgentExtension } from './AgentExtension'
 
 /**
  * The TldrawAgentApp class manages the agent system for a given editor instance.
@@ -54,6 +55,8 @@ export class TldrawAgentApp {
 		public options: {
 			onError: (e: any) => void
 			accessPolicy: BasdrawAccessPolicy
+			/** Lifecycle extensions given to every agent this app creates. */
+			extensions?: readonly TldrawAgentExtension[]
 		}
 	) {
 		this._editor = editor

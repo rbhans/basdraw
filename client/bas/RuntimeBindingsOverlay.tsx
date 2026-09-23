@@ -2,10 +2,10 @@ import { resolveBehaviorChannels } from './behaviorDefinitions'
 import { RuntimeValueLabels } from './RuntimeValueLabels'
 import { snapshotState } from './labelPresentation'
 export { formatSnapshot } from './labelPresentation'
-import { useRef, type CSSProperties, type ReactNode } from 'react'
+import { useMemo, useRef, type CSSProperties, type ReactNode } from 'react'
 import { Geometry2d, Mat, type Editor, type TLShape, useEditor, useValue } from 'tldraw'
-import { useBasRuntime } from './BasRuntimeContext'
-import { bindingsForRenderedShape, groupLeafShapes, pageVectorInShapeSpace, transformOriginForBindings } from './bindingScope'
+import { useBasRuntime, useRuntimeSnapshots } from './BasRuntimeContext'
+import { bindingsForRenderedShape, groupLeafShapes, pageVectorInShapeSpace, transformOriginForBindings, type BindingIndex } from './bindingScope'
 import { evaluateBinding, getRuntimeShapePresentation, type RuntimeShapePresentation } from './runtimeMapping'
 import { SynchronizedSvgMotion, SynchronizedSvgSpin } from './RuntimeMotion'
 import { useRuntimeValues } from './runtimeAnimationHooks'
@@ -19,35 +19,49 @@ type OverlayView = {
 
 export function RuntimeBindingsOverlay() {
 	const editor = useEditor()
-	const { document, snapshots } = useBasRuntime()
+	const { document, bindingsByShape } = useBasRuntime()
 	useValue('runtime overlay camera', () => editor.getCamera(), [editor])
 	useValue('runtime overlay page', () => editor.getCurrentPageId(), [editor])
 	const pageShapes = useValue('runtime overlay shapes', () => editor.getCurrentPageShapes(), [editor])
 	const camera = editor.getCamera()
 	const view = { camera, zoom: camera.z }
+	const byId = new Map<string, TLShape>(pageShapes.map((shape) => [shape.id, shape]))
+	// Only shapes that draw fills or labels need an overlay; each is resolved from the per-shape index.
+	const overlays = document.bindings.flatMap((binding) => {
+		if (binding.runtimeProperty !== 'fill' && binding.runtimeProperty !== 'levelFill') return []
+		const shape = byId.get(binding.shapeId)
+		if (!shape || !resolveBehaviorChannels(bindingsByShape.get(binding.shapeId) ?? []).some((candidate) => candidate.id === binding.id)) return []
+		return [{ binding, shape, shapeBindings: bindingsForRenderedShape(editor, shape, bindingsByShape) }]
+	})
+	const labelShapes = [...byId.values()].filter((shape) => bindingsByShape.get(shape.id)?.some((binding) => binding.runtimeProperty === 'label'))
+	const points = useStablePoints([
+		...overlays.flatMap(({ shapeBindings }) => shapeBindings.map((binding) => binding.pointReference)),
+		...labelShapes.flatMap((shape) => [
+			...(bindingsByShape.get(shape.id) ?? []).map((binding) => binding.pointReference),
+			...bindingsForRenderedShape(editor, shape, bindingsByShape).map((binding) => binding.pointReference),
+		]),
+	])
+	const snapshots = useRuntimeSnapshots(points)
 
 	return (
 		<div className="runtime-overlay-layer" aria-hidden="true">
-			{document.bindings.map((binding) => {
-				const shape = pageShapes.find((candidate) => candidate.id === binding.shapeId)
+			{overlays.map(({ binding, shape, shapeBindings }) => {
 				const snapshot = snapshots[binding.pointReference]
-				if (!shape || !snapshot) return null
-				const ownBindings = resolveBehaviorChannels(document.bindings.filter((candidate) => candidate.shapeId === binding.shapeId))
-				if (!ownBindings.some((candidate) => candidate.id === binding.id)) return null
-				const shapeBindings = bindingsForRenderedShape(editor, shape, document.bindings)
+				if (!snapshot) return null
 				const presentation = getRuntimeShapePresentation(shapeBindings, snapshots)
-
-				if (binding.runtimeProperty === 'fill' || binding.runtimeProperty === 'levelFill') {
-					return shape.type === 'group'
-						? <GroupFillOverlay key={binding.id} editor={editor} shape={shape} binding={binding} snapshot={snapshot} presentation={presentation} bindings={shapeBindings} allBindings={document.bindings} view={view} />
-						: <ShapeFillOverlay key={binding.id} editor={editor} shape={shape} binding={binding} snapshot={snapshot} allBindings={document.bindings} snapshots={snapshots} view={view} />
-				}
-
-				return null
+				return shape.type === 'group'
+					? <GroupFillOverlay key={binding.id} editor={editor} shape={shape} binding={binding} snapshot={snapshot} presentation={presentation} bindings={shapeBindings} allBindings={bindingsByShape} view={view} />
+					: <ShapeFillOverlay key={binding.id} editor={editor} shape={shape} binding={binding} snapshot={snapshot} bindings={shapeBindings} presentation={presentation} view={view} />
 			})}
-			<RuntimeValueLabels editor={editor} shapes={pageShapes} bindings={document.bindings} snapshots={snapshots} zoom={view.zoom} />
+			<RuntimeValueLabels editor={editor} shapes={labelShapes} bindings={document.bindings} bindingsByShape={bindingsByShape} snapshots={snapshots} zoom={view.zoom} />
 		</div>
 	)
+}
+
+/** Same point list, same array: keeps per-point subscriptions stable across camera and drag renders. */
+function useStablePoints(points: string[]) {
+	const key = [...new Set(points)].sort().join('\n')
+	return useMemo(() => key ? key.split('\n') : [], [key])
 }
 
 function ShapeFillOverlay({
@@ -55,22 +69,20 @@ function ShapeFillOverlay({
 	shape,
 	binding,
 	snapshot,
-	allBindings,
-	snapshots,
+	bindings,
+	presentation,
 	view,
 }: {
 	editor: Editor
 	shape: TLShape
 	binding: ShapeBinding
 	snapshot: PointSnapshot
-	allBindings: ShapeBinding[]
-	snapshots: Record<string, PointSnapshot>
+	bindings: ShapeBinding[]
+	presentation: RuntimeShapePresentation
 	view: OverlayView
 }) {
 	const geometry = editor.getShapeGeometry(shape)
 	const paths = geometryPaths(geometry)
-	const bindings = bindingsForRenderedShape(editor, shape, allBindings)
-	const presentation = getRuntimeShapePresentation(bindings, snapshots)
 	const center = transformOriginForBindings(editor, shape, bindings, geometry.bounds.center)
 	const scaleCenter = transformOriginForBindings(editor, shape, bindings, geometry.bounds.center, 'scale')
 	const viewportTransform = shapeViewportTransform(editor, shape, view)
@@ -108,7 +120,7 @@ function GroupFillOverlay({
 	snapshot: PointSnapshot
 	presentation: RuntimeShapePresentation
 	bindings: ShapeBinding[]
-	allBindings: ShapeBinding[]
+	allBindings: BindingIndex
 	view: OverlayView
 }) {
 	const groupBounds = editor.getShapePageBounds(shape)
@@ -213,7 +225,7 @@ function RuntimeSvgTransform({ center, scaleCenter, children, presentation, proj
 		scaled.current?.setAttribute('transform', `translate(${scaleCenter.x} ${scaleCenter.y}) scale(${values.scale}) translate(${-scaleCenter.x} ${-scaleCenter.y})`)
 	})
 	return (
-		<SynchronizedSvgMotion motion={presentation.motion ? { ...presentation.motion, ...project(presentation.motion) } : undefined} motions={presentation.motions?.map(motion => ({ ...motion, ...project(motion) }))}>
+		<SynchronizedSvgMotion motions={presentation.motions?.map(motion => ({ ...motion, ...project(motion) }))}>
 			<g ref={transform}>
 				<SynchronizedSvgSpin center={center} spin={presentation.spin}><g ref={scaled}>{children}</g></SynchronizedSvgSpin>
 			</g>

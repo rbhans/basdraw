@@ -1,12 +1,10 @@
 import { createContext, useContext, useMemo, useState, type ReactNode } from 'react'
 import {
-	BASDRAW_ACCESS_PROFILES,
 	getAccessProfile,
 	type BasdrawAccessPolicy,
 	type BasdrawAccessProfileId,
 } from '../../shared/access'
-
-const STORAGE_KEY = 'basdraw.access-profile.v1'
+import { readStoredAccessProfileId, selectAccessProfile } from './accessProfileStorage'
 
 type AccessPolicyContextValue = {
 	profileId: BasdrawAccessProfileId
@@ -17,18 +15,11 @@ type AccessPolicyContextValue = {
 const AccessPolicyContext = createContext<AccessPolicyContextValue | null>(null)
 
 export function AccessPolicyProvider({ children }: { children: ReactNode }) {
-	const [profileId, setProfile] = useState<BasdrawAccessProfileId>(() => {
-		try { return getAccessProfile(window.localStorage.getItem(STORAGE_KEY)).id }
-		catch { return BASDRAW_ACCESS_PROFILES[0].id }
-	})
+	const [profileId, setProfile] = useState<BasdrawAccessProfileId>(() => readStoredAccessProfileId())
 	const value = useMemo<AccessPolicyContextValue>(() => ({
 		profileId,
 		policy: getAccessProfile(profileId).policy,
-		setProfileId: (id) => {
-			const next = getAccessProfile(id).id
-			window.localStorage.setItem(STORAGE_KEY, next)
-			setProfile(next)
-		},
+		setProfileId: (id) => { selectAccessProfile(id, setProfile) },
 	}), [profileId])
 	return <AccessPolicyContext.Provider value={value}>{children}</AccessPolicyContext.Provider>
 }

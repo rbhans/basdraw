@@ -86,7 +86,15 @@ export type BasdrawPlugin = {
 	description: string
 	defaultEnabled?: boolean
 	alwaysEnabled?: boolean
+	/** Required plugins. Enabling this plugin enables them; disabling one disables this plugin. */
 	dependencies?: readonly BasdrawPluginId[]
+	/** Plugins this one enhances when present and must work without (e.g. drag-to-bind from a connection). */
+	optionalDependencies?: readonly BasdrawPluginId[]
+	/**
+	 * React contexts this plugin provides or consumes. A required context must come from the
+	 * host or a declared dependency; an optional one must have a no-provider fallback hook.
+	 */
+	contexts?: BasdrawPluginContexts
 	tldraw?: {
 		shapeUtils?: readonly TLAnyShapeUtilConstructor[]
 		bindingUtils?: readonly TLAnyBindingUtilConstructor[]
@@ -106,6 +114,15 @@ export type BasdrawPlugin = {
 	connection?: BasdrawConnectionContribution
 	onEditorMount?: (editor: Editor) => void | (() => void)
 }
+
+export type BasdrawPluginContexts = {
+	provides?: readonly string[]
+	requires?: readonly string[]
+	optional?: readonly string[]
+}
+
+/** Serializable descriptor fields, kept free of React so dependency rules are testable in Node. */
+export type BasdrawPluginManifest = Pick<BasdrawPlugin, 'id' | 'category' | 'version' | 'label' | 'description' | 'defaultEnabled' | 'alwaysEnabled' | 'dependencies' | 'optionalDependencies' | 'contexts'>
 
 export type BasdrawPluginPreferences = {
 	disabled: readonly BasdrawPluginId[]

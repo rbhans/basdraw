@@ -28,16 +28,16 @@ The first working slice is intentionally narrow:
 - Choose Full control, Canvas control, Analysis or View only without coupling future connection types to baskStream.
 - Keep the AI agent UI optional and hide it when the Canvas AI add-on is disabled.
 
-The current Niagara integration is read-only. The app does not expose baskStream write, alarm action, tag write, or relation write operations.
+The Niagara integration supports live reads and confirmation-gated writes exposed by the connected baskStream module: point actions, alarm acknowledgement/force-clear, direct tags and relations. It does not create station components or hierarchy definitions. Writes require Full control, an **Allow once** approval and a saved local audit record.
 
 ## Run locally
 
 Requirements:
 
-- Node.js 22.12 or newer
+- Node.js 22.18 or newer
 - A Niagara station with the baskStream service installed and running
 - Network access from this computer to the station web port
-- Optional for PDF import: Poppler (`pdfinfo` and `pdftocairo`) on PATH. On macOS, install with `brew install poppler`.
+- For PDF import/understanding: Poppler (`pdfinfo`, `pdftotext`, `pdfimages` and `pdftocairo`) on PATH. On macOS, install with `brew install poppler`. Legacy Office/OpenDocument imports additionally use LibreOffice (`soffice`).
 
 Install and start both the Vite app and the loopback baskStream bridge:
 
@@ -50,7 +50,9 @@ Open `http://127.0.0.1:5173/`.
 
 The bridge listens only on `127.0.0.1:8788`. It performs Niagara SCRAM authentication, verifies the server-final signature, keeps the authenticated cookies in memory, and converts the browser's local JSON WebSocket messages to the MessagePack frames used by baskStream. Passwords are not written to local storage, canvas data, logs, or source files.
 
-For a station with a local self-signed certificate, enable the per-connection certificate option in the UI. This changes trust only for that station connection.
+For a station with a local self-signed certificate, enable the per-connection certificate option in the UI. This changes trust only for that station connection, but it turns off certificate checks: anyone on the network path between this computer and the station could intercept or change the traffic, including the password. Use it only on a trusted network.
+
+**Test connection** opens a separate short-lived session to verify credentials and report the API version. It does not save the endpoint, write the station alias into the canvas or replace a live connection. If the station or bridge closes a live session, the Points panel shows the reason and a **Reconnect** action that refills the form from the last endpoint (the password is never stored, so it must be entered again). If subscriptions or lease renewals fail while connected, the panel shows that live values may be out of date and the app retries, recreating the `canvas:active` group when a renewal fails.
 
 ## Data boundaries
 
@@ -58,7 +60,7 @@ basdraw keeps three kinds of state separate:
 
 1. The tldraw store persists native shapes and their base appearance under `bas-whiteboard-canvas-v1`.
 2. BAS binding definitions and value mappings are stored in the owning shape's `meta.basBindings`. Station identity and the one-time migration marker are document metadata. The older `bas-whiteboard.document.v2` record remains untouched as a migration fallback; it is no longer the active binding store.
-3. Live point snapshots remain in React memory and are released when the station disconnects.
+3. Live point snapshots stay in an in-memory snapshot store outside React state and tldraw history, and are released when the station disconnects. Shapes, labels and widgets subscribe per point, so a value change re-renders only what reads that point.
 
 Connection profiles use a separate `bas-whiteboard.connection-profiles.v1` record. A remembered profile may contain a friendly name, station alias, endpoint, username, and TLS choice. It cannot contain a password or session token.
 
@@ -106,9 +108,15 @@ The complete tldraw Agent Starter Kit architecture remains in `client/`, `shared
 
 AI skills and references use the separate [D1 knowledge backend](docs/knowledge-backend.md). Normal drawing data remains in tldraw persistence. Apply the local schema once with `npm run knowledge:migrate`; enabled global, project and active-connection entries are then selected by the Worker for each model request.
 
-Enabled connection plugins can also register runtime AI tools. The agent sees redacted connection/tool descriptions and calls one generic typed action; the local adapter performs the protocol-specific request and returns a bounded result for the next agent turn. The built-in baskStream adapter currently exposes read-only `browse`, `search`, and batch `read`. Alternative connection plugins can expose entirely different operations without inheriting a Niagara-shaped interface. Write tools are visible only in Full control and pause for an **Allow once** confirmation before execution.
+Enabled connection plugins register runtime AI tools. The agent sees redacted connection/tool descriptions and calls one generic typed action; the local adapter performs the protocol-specific request and returns a bounded result for the next agent turn. The baskStream adapter exposes bounded discovery, reads and supported station-advertised write operations. Alternative connection plugins can expose entirely different operations without inheriting a Niagara-shaped interface. Write tools are visible only in Full control and pause for an **Allow once** confirmation, with proposed arguments and a preflight state preview. The runtime rechecks policy and connection session before execution and records the result.
+
+### Document understanding
+
+Drop documents on the canvas or choose **Import document** in Import & embed. PDFs (including scans), images, DOCX, XLSX, CSV/TSV and TXT/Markdown are read locally and indexed automatically as project references for Canvas AI. Original files and extracted content travel with the saved canvas. Editable PDF import also retains and indexes the original PDF. Google Docs/Sheets work through exported files; private Google links are not a connector. Legacy Office/OpenDocument formats additionally require LibreOffice. See [Document understanding](docs/document-understanding.md) for dependencies, limits and verification boundaries.
 
 The header access menu applies orthogonal policy presets. Full control enables AI canvas edits and connection read/write tools. Canvas control keeps AI canvas editing but shares no BAS tools. Analysis makes the canvas read-only while allowing AI inspection and read-only connection tools. View only makes the canvas read-only and turns Canvas AI off. Switching profiles cancels any active model request.
+
+The default is **Canvas control**: a first run, or a stored profile that is missing, corrupted or no longer recognized, starts there rather than in Full control, so a bad stored value never exposes station writes. Choose Full control explicitly to let the AI use write tools. Every write still needs Full control, an **Allow once** approval bound to the exact arguments, and a saved local audit record. A write whose outcome cannot be determined (for example, the connection drops after sending) is recorded as `unknown` rather than retried.
 
 No OpenAI API key is required for local subscription use. Install Codex, sign in with ChatGPT, then start basdraw normally:
 
@@ -186,7 +194,7 @@ Open `/scripts/vector-pdf-qa.html` with the local PDF service running for vector
 
 The architecture review, remaining limitations, and proposed feature priorities are in [PROJECT-REVIEW.md](PROJECT-REVIEW.md).
 
-Custom basdraw capabilities are assembled through the [plugin architecture](docs/plugin-architecture.md). It keeps optional authoring tools, property sections, runtime behavior, connections and future agent capabilities independent while preserving saved-canvas compatibility.
+Custom basdraw capabilities are assembled through the [plugin architecture](docs/plugin-architecture.md). It keeps optional authoring tools, property sections, runtime behavior, connections and future agent capabilities independent while preserving saved-canvas compatibility. Every optional add-on works with any other optional add-on turned off: for example, with **Niagara via baskStream** disabled, saved behaviors remain editable and only drag-to-bind is unavailable. A failing add-on section shows a small inline notice instead of stopping the editor. `npm test` checks every enable/disable combination of the built-in add-ons for consistent dependencies.
 
 The production build currently includes the optional Agent Starter Kit worker, which makes the worker bundle much larger than the browser client. Code splitting and a deployment-specific station bridge are later release concerns.
 

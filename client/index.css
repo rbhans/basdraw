@@ -2581,3 +2581,35 @@ button.prompt-tag span {
 .connection-approval details { font-size: 11px; }
 .connection-approval pre { max-height: 96px; overflow: auto; white-space: pre-wrap; }
 .connection-approval > div { display: flex; justify-content: flex-end; gap: 6px; }
+/* Document cards use the same editor theme and restrained controls as other add-ons. */
+.bas-document { background: var(--tl-color-panel); color: var(--tl-color-text); border: 1px solid var(--tl-color-low-border); border-radius: 8px; overflow: hidden; display: flex; flex-direction: column; pointer-events: none; }
+.bas-document header { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 16px; border-bottom: 1px solid var(--tl-color-low-border); font-size: 13px; }
+.bas-document header strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bas-document header span { color: var(--tl-color-text-3); flex-shrink: 0; font-size: 11px; }
+.bas-document img { width: 100%; flex: 1; min-height: 0; object-fit: contain; background: white; }
+.bas-document pre { font: 13px/1.6 var(--tl-font-sans); white-space: pre-wrap; padding: 16px; overflow: hidden; }
+.bas-document-properties { display: flex; flex-direction: column; gap: 4px; padding: 8px; font-size: 12px; }
+.bas-document-properties p { color: var(--tl-color-text-3); margin: 4px 0; overflow-wrap: anywhere; }
+.bas-document-dialog { width: min(740px, 90vw); }
+.bas-document-dialog pre { white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/1.6 var(--tl-font-mono); }
+
+/* Plugin isolation: a failing plugin section degrades to this notice. */
+.bas-plugin-error {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: var(--tl-space-2);
+	padding: var(--tl-space-2) var(--tl-space-3);
+	border: 1px solid color-mix(in srgb, var(--tl-color-danger) 32%, transparent);
+	border-radius: var(--tl-radius-2);
+	background: color-mix(in srgb, var(--tl-color-danger) 8%, var(--tl-color-panel));
+	color: var(--tl-color-text-1);
+	font-size: 12px;
+	line-height: 1.4;
+}
+
+.inline-error .niagara-reconnect {
+	display: flex;
+	margin-top: var(--tl-space-2);
+	color: var(--tl-color-text-1);
+}

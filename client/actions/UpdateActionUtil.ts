@@ -1,4 +1,4 @@
-import { TLBindingId } from 'tldraw'
+import { TLBindingId, TLShape } from 'tldraw'
 import {
 	convertFocusedShapeToTldrawShape,
 	convertSimpleIdToTldrawId,
@@ -26,7 +26,7 @@ export const UpdateActionUtil = registerActionUtil(
 			const { update } = action
 
 			// Ensure the shape ID refers to a real shape
-			const shapeId = helpers.ensureShapeIdExists(toSimpleShapeId(update.shapeId))
+			const shapeId = helpers.ensureShapeIdIsEditable(toSimpleShapeId(update.shapeId))
 			if (!shapeId) return null
 			update.shapeId = shapeId
 
@@ -80,7 +80,22 @@ export const UpdateActionUtil = registerActionUtil(
 				defaultShape: existingShape,
 			})
 
-			editor.updateShape(result.shape)
+			const ignored = [...(result.ignored ?? [])]
+			try {
+				editor.updateShape(result.shape)
+			} catch (error) {
+				// Plugin shapes validate their own props. If the model's prop values are invalid,
+				// keep the shape's props and apply the rest of the update.
+				if (action.update._type !== 'unknown') throw error
+				editor.updateShape({ ...result.shape, props: existingShape.props } as TLShape)
+				ignored.push(`props (${error instanceof Error ? error.message.slice(0, 200) : 'invalid values'})`)
+			}
+			if (ignored.length > 0) {
+				helpers.reportActionNote(
+					`update:${action.update.shapeId}`,
+					`Update of "${action.update.shapeId}" was only partly applied. Not applied: ${ignored.join(', ')}. Use a matching plugin capability to configure this shape.`
+				)
+			}
 
 			// Handle arrow bindings if they exist
 			if (result.bindings) {

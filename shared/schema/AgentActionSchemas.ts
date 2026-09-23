@@ -11,19 +11,6 @@ import { SimpleShapeIdSchema, TodoIdSchema } from '../types/ids-schema'
  * See `SystemPromptCategory.ts` for available values.
  */
 
-// Add Detail Action
-export const AddDetailAction = z
-	.object({
-		_type: z.literal('add-detail'),
-		intent: z.string(),
-	})
-	.meta({
-		title: 'Add Detail',
-		description: 'The AI plans further work so that it can add detail to its work.',
-	})
-
-export type AddDetailAction = z.infer<typeof AddDetailAction>
-
 // Align Action
 export const AlignAction = z
 	.object({
@@ -68,36 +55,6 @@ export const ClearAction = z
 	})
 
 export type ClearAction = z.infer<typeof ClearAction>
-
-// Count Shapes Action
-export const CountShapesAction = z
-	.object({
-		_type: z.literal('count'),
-		expression: z.string(),
-	})
-	.meta({
-		title: 'Count',
-		_access: 'analysis',
-		description:
-			'The AI requests to count the number of shapes in the canvas. The answer will be provided to the AI in a follow-up request.',
-	})
-
-export type CountShapesAction = z.infer<typeof CountShapesAction>
-
-// Country Info Action
-export const CountryInfoAction = z
-	.object({
-		_type: z.literal('countryInfo'),
-		code: z.string(),
-	})
-	.meta({
-		title: 'Country info',
-		_access: 'analysis',
-		description:
-			'The AI gets information about a country by providing its country code, eg: "de" for Germany.',
-	})
-
-export type CountryInfoAction = z.infer<typeof CountryInfoAction>
 
 // Connection Tool Action
 export const ConnectionToolAction = z

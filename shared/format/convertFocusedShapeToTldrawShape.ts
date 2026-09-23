@@ -3,6 +3,7 @@ import {
 	createShapeId,
 	Editor,
 	IndexKey,
+	isPageId,
 	reverseRecordsDiff,
 	TLArrowShape,
 	TLBindingCreate,
@@ -37,6 +38,35 @@ import {
 	FocusedTextShapePartial,
 	FocusedUnknownShape,
 } from './FocusedShape'
+import { AffineMatrix, applyMatrixToPoint, pagePointToParentSpace, Point, resolveParentSpacePosition } from './parentSpace'
+
+/**
+ * Focused shapes describe positions in page space (see convertTldrawShapeToFocusedShape),
+ * but tldraw stores x/y relative to the shape's parent. These helpers convert page-space
+ * positions back into the parent's space so that shapes inside frames don't jump.
+ */
+function getParentPageTransform(editor: Editor, parentId: TLShape['parentId'] | undefined): AffineMatrix | null {
+	if (!parentId || isPageId(parentId)) return null
+	if (!editor.getShape(parentId as TLShapeId)) return null
+	return editor.getShapePageTransform(parentId as TLShapeId) ?? null
+}
+
+function toParentSpacePosition(
+	editor: Editor,
+	defaultShape: Partial<TLShape>,
+	page: { x?: number | null; y?: number | null }
+): Point {
+	const parentId = defaultShape.parentId ?? editor.getCurrentPageId()
+	return resolveParentSpacePosition(
+		page,
+		{ x: defaultShape.x ?? 0, y: defaultShape.y ?? 0 },
+		getParentPageTransform(editor, parentId)
+	)
+}
+
+function mergeMeta(defaultShape: Partial<TLShape>, note: string | undefined) {
+	return { ...(defaultShape.meta ?? {}), note: note ?? defaultShape.meta?.note ?? '' }
+}
 
 /**
  * Convert a FocusedShape to a shape object to a tldraw shape using defaultShape for fallback values
@@ -49,7 +79,7 @@ export function convertFocusedShapeToTldrawShape(
 	editor: Editor,
 	focusedShape: FocusedShape,
 	{ defaultShape }: { defaultShape: Partial<TLShape> }
-): { shape: TLShape; bindings?: TLBindingCreate[] } {
+): { shape: TLShape; bindings?: TLBindingCreate[]; ignored?: string[] } {
 	switch (focusedShape._type) {
 		case 'text': {
 			return convertTextShapeToTldrawShape(editor, focusedShape, { defaultShape })
@@ -224,17 +254,22 @@ function convertTextShapeToTldrawShape(
 					: (defaultTextShape.props?.w ?? 100),
 			font,
 		},
-		meta: {
-			note: focusedShape.note ?? defaultTextShape.meta?.note ?? '',
-		},
+		meta: mergeMeta(defaultTextShape, focusedShape.note),
 	}
 
 	const unpositionedBounds = getDummyBounds(editor, unpositionedShape)
 
-	const position = new Vec(defaultTextShape.x ?? 0, defaultTextShape.y ?? 0)
-	const x = focusedShape.x ?? defaultTextShape.x ?? 0
-	const y = focusedShape.y ?? defaultTextShape.y ?? 0
-	switch (focusedShape.anchor) {
+	const parentTransform = getParentPageTransform(
+		editor,
+		defaultTextShape.parentId ?? editor.getCurrentPageId()
+	)
+	const fallbackLocal = { x: defaultTextShape.x ?? 0, y: defaultTextShape.y ?? 0 }
+	const hasPagePosition = typeof focusedShape.x === 'number' || typeof focusedShape.y === 'number'
+	const fallbackPage = parentTransform ? applyMatrixToPoint(parentTransform, fallbackLocal) : fallbackLocal
+	const position = new Vec(fallbackPage.x, fallbackPage.y)
+	const x = focusedShape.x ?? fallbackPage.x
+	const y = focusedShape.y ?? fallbackPage.y
+	switch (hasPagePosition ? focusedShape.anchor : undefined) {
 		case 'top-left': {
 			position.x = x
 			position.y = y
@@ -276,15 +311,17 @@ function convertTextShapeToTldrawShape(
 			break
 		}
 		case 'center': {
-			position.x = focusedShape.x - unpositionedBounds.w / 2
-			position.y = focusedShape.y - unpositionedBounds.h / 2
+			position.x = x - unpositionedBounds.w / 2
+			position.y = y - unpositionedBounds.h / 2
 			break
 		}
 	}
+	// The position was computed in page space; convert it into the parent's space.
+	const localPosition = hasPagePosition ? pagePointToParentSpace(position, parentTransform) : fallbackLocal
 	const positionedShape: TLTextShape = {
 		...unpositionedShape,
-		x: position.x,
-		y: position.y,
+		x: localPosition.x,
+		y: localPosition.y,
 	}
 
 	return {
@@ -300,10 +337,16 @@ function convertLineShapeToTldrawShape(
 	const shapeId = convertSimpleIdToTldrawId(focusedShape.shapeId)
 	const defaultLineShape = defaultShape as TLLineShape
 
-	const x1 = focusedShape.x1 ?? 0
-	const y1 = focusedShape.y1 ?? 0
-	const x2 = focusedShape.x2 ?? 0
-	const y2 = focusedShape.y2 ?? 0
+	const parentTransform = getParentPageTransform(
+		editor,
+		defaultLineShape.parentId ?? editor.getCurrentPageId()
+	)
+	const start = pagePointToParentSpace({ x: focusedShape.x1 ?? 0, y: focusedShape.y1 ?? 0 }, parentTransform)
+	const end = pagePointToParentSpace({ x: focusedShape.x2 ?? 0, y: focusedShape.y2 ?? 0 }, parentTransform)
+	const x1 = start.x
+	const y1 = start.y
+	const x2 = end.x
+	const y2 = end.y
 	const minX = Math.min(x1, x2)
 	const minY = Math.min(y1, y2)
 
@@ -340,9 +383,7 @@ function convertLineShapeToTldrawShape(
 				scale: defaultLineShape.props?.scale ?? 1,
 				spline: defaultLineShape.props?.spline ?? 'line',
 			},
-			meta: {
-				note: focusedShape.note ?? defaultLineShape.meta?.note ?? '',
-			},
+			meta: mergeMeta(defaultLineShape, focusedShape.note),
 		},
 	}
 }
@@ -355,12 +396,21 @@ function convertArrowShapeToTldrawShape(
 	const shapeId = convertSimpleIdToTldrawId(focusedShape.shapeId)
 	const defaultArrowShape = defaultShape as TLArrowShape
 
+	// Page-space endpoints (used for binding anchors)
 	const x1 = focusedShape.x1 ?? defaultArrowShape.props?.start?.x ?? 0
 	const y1 = focusedShape.y1 ?? defaultArrowShape.props?.start?.y ?? 0
 	const x2 = focusedShape.x2 ?? defaultArrowShape.props?.end?.x ?? 0
 	const y2 = focusedShape.y2 ?? defaultArrowShape.props?.end?.y ?? 0
-	const minX = Math.min(x1, x2)
-	const minY = Math.min(y1, y2)
+
+	// Parent-space endpoints (used for the shape record)
+	const parentTransform = getParentPageTransform(
+		editor,
+		defaultArrowShape.parentId ?? editor.getCurrentPageId()
+	)
+	const localStart = pagePointToParentSpace({ x: x1, y: y1 }, parentTransform)
+	const localEnd = pagePointToParentSpace({ x: x2, y: y2 }, parentTransform)
+	const minX = Math.min(localStart.x, localEnd.x)
+	const minY = Math.min(localStart.y, localEnd.y)
 
 	// Handle richText properly - focusedShape takes priority
 	let richText
@@ -390,7 +440,7 @@ function convertArrowShapeToTldrawShape(
 			color: asColor(focusedShape.color ?? defaultArrowShape.props?.color ?? 'black'),
 			dash: defaultArrowShape.props?.dash ?? 'draw',
 			elbowMidPoint: defaultArrowShape.props?.elbowMidPoint ?? 0.5,
-			end: { x: x2 - minX, y: y2 - minY },
+			end: { x: localEnd.x - minX, y: localEnd.y - minY },
 			fill: defaultArrowShape.props?.fill ?? 'none',
 			font: defaultArrowShape.props?.font ?? 'draw',
 			kind: defaultArrowShape.props?.kind ?? 'arc',
@@ -399,11 +449,9 @@ function convertArrowShapeToTldrawShape(
 			richText,
 			scale: defaultArrowShape.props?.scale ?? 1,
 			size: defaultArrowShape.props?.size ?? 's',
-			start: { x: x1 - minX, y: y1 - minY },
+			start: { x: localStart.x - minX, y: localStart.y - minY },
 		},
-		meta: {
-			note: focusedShape.note ?? defaultArrowShape.meta?.note ?? '',
-		},
+		meta: mergeMeta(defaultArrowShape, focusedShape.note),
 	}
 
 	// Handle arrow bindings if fromId or toId are provided
@@ -488,13 +536,15 @@ function convertGeoShapeToTldrawShape(
 		fill = convertFocusedFillToTldrawFill('none')
 	}
 
+	const position = toParentSpacePosition(editor, defaultGeoShape, focusedShape)
+
 	return {
 		shape: {
 			id: shapeId,
 			type: 'geo',
 			typeName: 'shape',
-			x: focusedShape.x ?? defaultGeoShape.x ?? 0,
-			y: focusedShape.y ?? defaultGeoShape.y ?? 0,
+			x: position.x,
+			y: position.y,
 			rotation: defaultGeoShape.rotation ?? 0,
 			index: defaultGeoShape.index ?? editor.getHighestIndexForParent(editor.getCurrentPageId()),
 			parentId: defaultGeoShape.parentId ?? editor.getCurrentPageId(),
@@ -519,9 +569,7 @@ function convertGeoShapeToTldrawShape(
 				flipX: defaultGeoShape.props?.flipX ?? false,
 				flipY: defaultGeoShape.props?.flipY ?? false,
 			},
-			meta: {
-				note: focusedShape.note ?? defaultGeoShape.meta?.note ?? '',
-			},
+			meta: mergeMeta(defaultGeoShape, focusedShape.note),
 		},
 	}
 }
@@ -545,13 +593,15 @@ function convertNoteShapeToTldrawShape(
 		richText = toRichText('')
 	}
 
+	const position = toParentSpacePosition(editor, defaultNoteShape, focusedShape)
+
 	return {
 		shape: {
 			id: shapeId,
 			type: 'note',
 			typeName: 'shape',
-			x: focusedShape.x ?? defaultNoteShape.x ?? 0,
-			y: focusedShape.y ?? defaultNoteShape.y ?? 0,
+			x: position.x,
+			y: position.y,
 			rotation: defaultNoteShape.rotation ?? 0,
 			index: defaultNoteShape.index ?? editor.getHighestIndexForParent(editor.getCurrentPageId()),
 			parentId: defaultNoteShape.parentId ?? editor.getCurrentPageId(),
@@ -571,9 +621,7 @@ function convertNoteShapeToTldrawShape(
 				verticalAlign: defaultNoteShape.props?.verticalAlign ?? 'middle',
 				textLastEditedBy: defaultNoteShape.props?.textLastEditedBy ?? null,
 			},
-			meta: {
-				note: focusedShape.note ?? defaultNoteShape.meta?.note ?? '',
-			},
+			meta: mergeMeta(defaultNoteShape, focusedShape.note),
 		},
 	}
 }
@@ -613,9 +661,7 @@ function convertDrawShapeToTldrawShape(
 				color: asColor(focusedShape.color ?? defaultDrawShape.props?.color ?? 'black'),
 				fill,
 			},
-			meta: {
-				note: focusedShape.note ?? defaultDrawShape.meta?.note ?? '',
-			},
+			meta: mergeMeta(defaultDrawShape, focusedShape.note),
 		},
 	}
 }
@@ -624,26 +670,77 @@ function convertUnknownShapeToTldrawShape(
 	editor: Editor,
 	focusedShape: FocusedUnknownShape,
 	{ defaultShape }: { defaultShape: Partial<TLShape> }
-): { shape: TLShape } {
+): { shape: TLShape; ignored: string[] } {
 	const shapeId = convertSimpleIdToTldrawId(focusedShape.shapeId)
+	const position = toParentSpacePosition(editor, defaultShape, focusedShape)
+	const ignored: string[] = []
+
+	const defaultProps = (defaultShape.props ?? {}) as Record<string, unknown>
+	const props: Record<string, unknown> = { ...defaultProps }
+
+	// Size: only shapes that store their size as numeric w/h props can be resized this way.
+	const sizeChanged =
+		(typeof focusedShape.w === 'number' && focusedShape.w !== defaultProps.w) ||
+		(typeof focusedShape.h === 'number' && focusedShape.h !== defaultProps.h)
+	if (typeof defaultProps.w === 'number' && typeof defaultProps.h === 'number') {
+		if (typeof focusedShape.w === 'number' && focusedShape.w > 0) props.w = focusedShape.w
+		if (typeof focusedShape.h === 'number' && focusedShape.h > 0) props.h = focusedShape.h
+	} else if (sizeChanged && defaultShape.id) {
+		// The size was derived from geometry, so we can't write it back.
+		const bounds = editor.getShapePageBounds(defaultShape.id)
+		if (
+			!bounds ||
+			Math.abs(bounds.w - focusedShape.w) > 0.5 ||
+			Math.abs(bounds.h - focusedShape.h) > 0.5
+		) {
+			ignored.push('w/h (this shape type has no size props; use resize or a plugin capability)')
+		}
+	}
+
+	// Props: apply primitive values for keys the shape already has, with the same type.
+	// Anything else could produce an invalid record, so it's reported instead of written.
+	for (const [key, value] of Object.entries(focusedShape.props ?? {})) {
+		const current = defaultProps[key]
+		if (key === 'w' || key === 'h') continue
+		if (current === value) continue
+		const isPrimitive =
+			typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean'
+		if (!isPrimitive || typeof current !== typeof value) {
+			if (JSON.stringify(current) !== JSON.stringify(value)) ignored.push(`props.${key}`)
+			continue
+		}
+		// Long strings are truncated when shown to the model; never write a truncated copy back.
+		if (typeof current === 'string' && current.length > 2_000) {
+			ignored.push(`props.${key}`)
+			continue
+		}
+		props[key] = value
+	}
+
+	const meta: Record<string, any> = mergeMeta(defaultShape, focusedShape.note)
+	if (typeof focusedShape.name === 'string' && focusedShape.name !== defaultShape.meta?.basName) {
+		meta.basName = focusedShape.name
+	}
 
 	return {
 		shape: {
 			id: shapeId,
 			type: defaultShape.type ?? 'geo',
 			typeName: 'shape',
-			x: focusedShape.x ?? defaultShape.x ?? 0,
-			y: focusedShape.y ?? defaultShape.y ?? 0,
-			rotation: defaultShape.rotation ?? 0,
+			x: position.x,
+			y: position.y,
+			rotation:
+				typeof focusedShape.rotation === 'number' && Number.isFinite(focusedShape.rotation)
+					? focusedShape.rotation
+					: (defaultShape.rotation ?? 0),
 			index: defaultShape.index ?? editor.getHighestIndexForParent(editor.getCurrentPageId()),
 			parentId: defaultShape.parentId ?? editor.getCurrentPageId(),
 			isLocked: defaultShape.isLocked ?? false,
 			opacity: defaultShape.opacity ?? 1,
-			props: defaultShape.props ?? ({} as any),
-			meta: {
-				note: focusedShape.note ?? defaultShape.meta?.note ?? '',
-			},
-		},
+			props: props as any,
+			meta,
+		} as TLShape,
+		ignored,
 	}
 }
 

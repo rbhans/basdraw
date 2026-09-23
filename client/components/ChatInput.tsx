@@ -25,7 +25,7 @@ export function ChatInput({ handleSubmit, inputRef, status }: {
 	const contextItems = useValue('contextItems', () => agent.context.getItems(), [agent])
 	const isContextToolActive = useValue('isContextToolActive', () =>
 		['target-shape', 'target-area'].includes(editor.getCurrentToolId()), [editor])
-	const stopping = isGenerating && inputValue === ''
+	const stopping = isGenerating && inputValue.trim() === ''
 
 	return (
 		<div className="chat-input">

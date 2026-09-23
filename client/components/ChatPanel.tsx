@@ -18,8 +18,8 @@ export function ChatPanel({ status, onClose }: { status: AgentStatus; onClose: (
 			const formData = new FormData(e.currentTarget)
 			const value = formData.get('input') as string
 
-			// If the user's message is empty, just cancel the current request (if there is one)
-			if (value === '') {
+			// If the user's message is empty (or only whitespace), just cancel the current request (if there is one)
+			if (value.trim() === '') {
 				agent.cancel()
 				return
 			}

@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useRef, useState, type DragEvent as ReactDragEvent, type ReactNode } from 'react'
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type DragEvent as ReactDragEvent, type ReactNode } from 'react'
 import { useEditor } from 'tldraw'
 import { useWorkspace } from './BasWorkspaceContext'
 import type { PointSnapshot, StationNode } from './types'
@@ -6,26 +6,40 @@ import type { PointSnapshot, StationNode } from './types'
 const MIME = 'application/x-basdraw-point'
 export type DraggedPoint = { point: StationNode; stationAlias: string; snapshot?: PointSnapshot }
 type PointDrop = DraggedPoint & { shapeId: string; token: number }
-type DragContext = { dragged: DraggedPoint | null; begin: (event: ReactDragEvent, point: StationNode) => void; end: () => void; pending: PointDrop | null; request: (drop: PointDrop | null) => void }
+type DragContext = { dragged: DraggedPoint | null; begin: (event: ReactDragEvent, point: StationNode) => void; end: () => void; pending: PointDrop | null; request: (drop: PointDrop | null) => void; available: boolean }
 const Context = createContext<DragContext | null>(null)
 
 export function PointDragProvider({ children }: { children: ReactNode }) {
 	const workspace = useWorkspace()
+	const alias = workspace.connectedProfile?.alias
 	const [dragged, setDragged] = useState<DraggedPoint | null>(null)
 	const [pending, request] = useState<PointDrop | null>(null)
-	return <Context.Provider value={{ dragged, pending, request, end: () => setDragged(null), begin: (event, point) => {
-		if (!workspace.connectedProfile) { event.preventDefault(); return }
+	const end = useCallback(() => setDragged(null), [])
+	const begin = useCallback((event: ReactDragEvent, point: StationNode) => {
+		if (!alias) { event.preventDefault(); return }
 		// Only in-app drags are accepted; no external payload is trusted as a point.
 		event.dataTransfer.setData(MIME, 'point')
 		event.dataTransfer.effectAllowed = 'copy'
-		setDragged({ point, stationAlias: workspace.connectedProfile.alias })
-	} }}>{children}</Context.Provider>
+		setDragged({ point, stationAlias: alias })
+	}, [alias])
+	const value = useMemo<DragContext>(() => ({ dragged, pending, request, end, begin, available: true }), [begin, dragged, end, pending])
+	return <Context.Provider value={value}>{children}</Context.Provider>
 }
 
-export function usePointDrag() {
-	const context = useContext(Context)
-	if (!context) throw new Error('Point drag context is missing')
-	return context
+// Drag-to-bind belongs to the baskStream plugin. Without it, consumers get an inert
+// context: nothing is ever dragged or pending, and begin/request are no-ops.
+const INERT_DRAG: DragContext = {
+	dragged: null,
+	pending: null,
+	available: false,
+	begin: (event) => { event.preventDefault() },
+	end: () => {},
+	request: () => {},
+}
+
+/** Optional context: safe to call when the baskStream plugin (its provider) is disabled. */
+export function usePointDrag(): DragContext {
+	return useContext(Context) ?? INERT_DRAG
 }
 
 export function CanvasPointDrop() {

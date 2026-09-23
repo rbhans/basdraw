@@ -105,10 +105,9 @@ export class AgentActionManager extends BaseAgentManager {
 				promise = util.applyAction(structuredClone(action), helpers) ?? null
 			})
 		} catch (error) {
-			// always toast the error
-			this.agent.onError(error)
+			// The request loop reports the error (once), aborts the stream and ends the turn
 			promise = null
-			throw error // you may not want to throw in productions
+			throw error
 		} finally {
 			this.agent.setIsActingOnEditor(false)
 		}

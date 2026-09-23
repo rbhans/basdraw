@@ -83,6 +83,7 @@ export class AgentAppAgentsManager extends BaseAgentAppManager {
 			id,
 			onError: this.app.options.onError,
 			accessPolicy: this.app.options.accessPolicy,
+			extensions: this.app.options.extensions,
 		})
 
 		// Register the agent in the static atom

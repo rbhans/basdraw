@@ -30,6 +30,8 @@ export interface ChatHistoryActionItem {
 	action: Streaming<AgentAction>
 	diff: RecordsDiff<TLRecord>
 	acceptance: 'pending' | 'accepted' | 'rejected'
+	/** True when the diff was dropped to bound saved history; the change can no longer be reviewed. */
+	diffOmitted?: boolean
 }
 
 /**

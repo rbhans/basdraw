@@ -7,6 +7,7 @@ import { useVectorPdfDialog, VectorPdfDialog } from './VectorPdfDialog'
 import { RuntimeShapeWrapper } from './RuntimeShapeWrapper'
 import { RuntimeBindingsOverlay } from './RuntimeBindingsOverlay'
 import { BasRuntimeProvider } from './BasRuntimeContext'
+import { BasdrawPluginProvider } from '../plugins/PluginContext'
 import { useBasWorkspace } from './useBasWorkspace'
 import { dispatchShapeBindingAction } from './shapeBindings'
 import { checkPdfFillInteriors, coilOutlineSvg } from './pdfFillQaChecks'
@@ -102,4 +103,4 @@ function Fixture() {
 		<div style={{ position: 'absolute', inset: 0 }}><section style={{ height: 210, overflow: 'auto', padding: 8 }}><strong>Isolated vector PDF QA. No saved canvas or station connection.</strong><button disabled={!editor || busy} onClick={check}>Run PDF checks</button><button onClick={() => setRunning(v => !v)}>{running ? 'Stop fan' : 'Start fan'}</button><ul>{results.map((result, i) => <li key={i}>{result}</li>)}</ul></section><div style={{ position: 'absolute', inset: '210px 0 0' }}><Tldraw components={components} onMount={setEditor} /></div></div>
 	</BasRuntimeProvider>
 }
-if (import.meta.env.DEV) { const root = createRoot(document.getElementById('root')!); root.render(<Fixture />); import.meta.hot?.dispose(() => root.unmount()) }
+if (import.meta.env.DEV) { const root = createRoot(document.getElementById('root')!); root.render(<BasdrawPluginProvider><Fixture /></BasdrawPluginProvider>); import.meta.hot?.dispose(() => root.unmount()) }

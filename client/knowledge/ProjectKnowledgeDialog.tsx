@@ -4,7 +4,7 @@ import {
 	TldrawUiDialogCloseButton, TldrawUiDialogBody, TldrawUiDialogFooter, TldrawUiInput,
 	useDialogs, useEditor, type TLUiDialogProps,
 } from 'tldraw'
-import type { KnowledgeEntry } from '../../shared/knowledge'
+import type { KnowledgeEntry, KnowledgeEntrySummary } from '../../shared/knowledge'
 import { getProjectId } from './currentKnowledgeScope'
 
 export function ProjectKnowledgeButton() {
@@ -20,7 +20,9 @@ function ProjectKnowledgeDialog({ onClose }: TLUiDialogProps) {
 	const editor = useEditor()
 	const [projectId, setProjectId] = useState(() => getProjectId(editor))
 	const [projectInput, setProjectInput] = useState(projectId)
-	const [entries, setEntries] = useState<KnowledgeEntry[]>([])
+	const [entries, setEntries] = useState<KnowledgeEntrySummary[]>([])
+	const [nextCursor, setNextCursor] = useState<string | null>(null)
+	const [loadingMore, setLoadingMore] = useState(false)
 	const [draft, setDraft] = useState(emptyDraft)
 	const [selectedId, setSelectedId] = useState<string | null>(null)
 	const [error, setError] = useState('')
@@ -31,18 +33,36 @@ function ProjectKnowledgeDialog({ onClose }: TLUiDialogProps) {
 	const [dirty, setDirty] = useState(false)
 	useEffect(() => {
 		const controller = new AbortController()
-		setLoading(true); setError(''); setEntries([])
-		void fetch(`/api/knowledge?scopeType=project&scopeId=${encodeURIComponent(projectId)}`, { signal: controller.signal })
-			.then(readResponse).then((data) => setEntries(data.entries))
+		setLoading(true); setError(''); setEntries([]); setNextCursor(null)
+		void fetch(listUrl(projectId), { signal: controller.signal })
+			.then(readList).then((data) => { setEntries(data.entries); setNextCursor(data.nextCursor) })
 			.catch((cause) => { if (!controller.signal.aborted) setError(String(cause.message || cause)) })
 			.finally(() => { if (!controller.signal.aborted) setLoading(false) })
 		return () => controller.abort()
 	}, [projectId, revision])
 
-	function choose(entry?: KnowledgeEntry) {
+	async function loadMore() {
+		if (!nextCursor) return
+		setLoadingMore(true); setError('')
+		try {
+			const data = await readList(await fetch(listUrl(projectId, nextCursor)))
+			setEntries((current) => [...current, ...data.entries.filter((entry) => !current.some((item) => item.id === entry.id))])
+			setNextCursor(data.nextCursor)
+		} catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)) }
+		finally { setLoadingMore(false) }
+	}
+	function show(entry?: KnowledgeEntry) {
 		setSelectedId(entry?.id ?? null)
 		setDraft(entry ? { title: entry.title, description: entry.description, content: entry.content, kind: entry.kind, enabled: entry.enabled } : emptyDraft)
 		setDirty(false); setNotice(''); setError('')
+	}
+	/** The list holds metadata only; the body is fetched when an entry is opened. */
+	async function choose(summary?: KnowledgeEntrySummary) {
+		if (!summary) return show()
+		setBusy(true); setError('')
+		try { show((await readResponse(await fetch(`/api/knowledge/${encodeURIComponent(summary.id)}`))).entry) }
+		catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)) }
+		finally { setBusy(false) }
 	}
 	function patch(values: Partial<typeof draft>) { setDraft((current) => ({ ...current, ...values })); setDirty(true); setNotice('') }
 	async function save() {
@@ -61,7 +81,7 @@ function ProjectKnowledgeDialog({ onClose }: TLUiDialogProps) {
 		if (!id || id === projectId) return
 		const document = editor.getDocumentSettings()
 		editor.updateDocumentSettings({ meta: { ...document.meta, basdrawProjectId: id } })
-		setProjectId(id); choose()
+		setProjectId(id); show()
 	}
 	return <div className="project-knowledge-dialog">
 		<TldrawUiDialogHeader><TldrawUiDialogTitle>Project knowledge</TldrawUiDialogTitle><TldrawUiDialogCloseButton /></TldrawUiDialogHeader>
@@ -69,12 +89,15 @@ function ProjectKnowledgeDialog({ onClose }: TLUiDialogProps) {
 			<p>Notes, references and procedures the agent can find when working on this project. Connection skills come with their add-ons.</p>
 			<div className="project-knowledge-layout">
 				<nav aria-label="Project knowledge entries">
-					<TldrawUiButton type="normal" disabled={busy || dirty} onClick={() => choose()}><TldrawUiButtonLabel>New entry</TldrawUiButtonLabel></TldrawUiButton>
+					<TldrawUiButton type="normal" disabled={busy || dirty} onClick={() => show()}><TldrawUiButtonLabel>New entry</TldrawUiButtonLabel></TldrawUiButton>
 					{loading && <p role="status">Loading…</p>}
 					{!loading && entries.length === 0 && <p>No project knowledge yet.</p>}
-					{entries.map((entry) => <TldrawUiButton key={entry.id} type="normal" disabled={busy || dirty} isActive={entry.id === selectedId} onClick={() => choose(entry)}>
+					{entries.map((entry) => <TldrawUiButton key={entry.id} type="normal" disabled={busy || dirty} isActive={entry.id === selectedId} onClick={() => void choose(entry)}>
 						<TldrawUiButtonLabel>{entry.title}{entry.enabled ? '' : ' (off)'}</TldrawUiButtonLabel>
 					</TldrawUiButton>)}
+					{nextCursor && <TldrawUiButton type="low" disabled={busy || loadingMore} onClick={() => void loadMore()}>
+						<TldrawUiButtonLabel>{loadingMore ? 'Loading…' : 'Load more'}</TldrawUiButtonLabel>
+					</TldrawUiButton>}
 				</nav>
 				<div className="project-knowledge-form">
 					<label className="binding-field"><span>Title</span><TldrawUiInput value={draft.title} onValueChange={(title) => patch({ title })} placeholder="AHU naming conventions" aria-label="Knowledge title" disabled={busy} /></label>
@@ -91,15 +114,25 @@ function ProjectKnowledgeDialog({ onClose }: TLUiDialogProps) {
 			{error && <p role="alert">{error}</p>}{notice && <p role="status">{notice}</p>}
 		</TldrawUiDialogBody>
 		<TldrawUiDialogFooter>
-			{dirty && <TldrawUiButton type="normal" disabled={busy} onClick={() => choose(entries.find((entry) => entry.id === selectedId))}><TldrawUiButtonLabel>Discard edits</TldrawUiButtonLabel></TldrawUiButton>}
+			{dirty && <TldrawUiButton type="normal" disabled={busy} onClick={() => void choose(entries.find((entry) => entry.id === selectedId))}><TldrawUiButtonLabel>Discard edits</TldrawUiButtonLabel></TldrawUiButton>}
 			<TldrawUiButton type="normal" onClick={onClose}><TldrawUiButtonLabel>Close</TldrawUiButtonLabel></TldrawUiButton>
 			<TldrawUiButton type="primary" disabled={busy || loading || !dirty || !draft.title.trim() || !draft.content.trim()} onClick={() => void save()}><TldrawUiButtonLabel>{busy ? 'Saving…' : 'Save'}</TldrawUiButtonLabel></TldrawUiButton>
 		</TldrawUiDialogFooter>
 	</div>
 }
 
-async function readResponse(response: Response): Promise<{ entries: KnowledgeEntry[]; entry: KnowledgeEntry }> {
-	const data = await response.json() as { entries: KnowledgeEntry[]; entry: KnowledgeEntry; error?: string }
+function listUrl(projectId: string, cursor?: string) {
+	return `/api/knowledge?scopeType=project&scopeId=${encodeURIComponent(projectId)}&limit=50${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`
+}
+
+async function readList(response: Response): Promise<{ entries: KnowledgeEntrySummary[]; nextCursor: string | null }> {
+	const data = await response.json() as { entries: KnowledgeEntrySummary[]; nextCursor?: string | null; error?: string }
+	if (!response.ok) throw new Error(data.error || 'Could not load project knowledge.')
+	return { entries: data.entries, nextCursor: data.nextCursor ?? null }
+}
+
+async function readResponse(response: Response): Promise<{ entry: KnowledgeEntry }> {
+	const data = await response.json() as { entry: KnowledgeEntry; error?: string }
 	if (!response.ok) throw new Error(data.error || 'Could not load project knowledge.')
 	return data
 }

@@ -20,7 +20,7 @@ export const DeleteActionUtil = registerActionUtil(
 		override sanitizeAction(action: Streaming<DeleteAction>, helpers: AgentHelpers) {
 			if (!action.complete) return action
 
-			const shapeId = helpers.ensureShapeIdExists(action.shapeId)
+			const shapeId = helpers.ensureShapeIdIsEditable(action.shapeId, { includeDescendants: true })
 			if (!shapeId) return null
 
 			action.shapeId = shapeId

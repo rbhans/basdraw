@@ -4,6 +4,10 @@ import { FocusedShape } from '../shared/format/FocusedShape'
 import { ContextItem } from '../shared/types/ContextItem'
 import { SimpleShapeId } from '../shared/types/ids-schema'
 import { TldrawAgent } from './agent/TldrawAgent'
+import { getProtectingLockId, hasProtectedDescendant, LockNode } from './agent/shapeLocks'
+
+/** Maximum number of distinct notes reported back to the model per request. */
+const MAX_ACTION_NOTES = 20
 
 /**
  * This class contains handles the transformations that happen throughout a
@@ -306,6 +310,98 @@ export class AgentHelpers {
 
 		// Otherwise, give up
 		return null
+	}
+
+	// ==================== Locks & action notes ====================
+
+	/**
+	 * Notes about actions that were skipped or only partly applied, keyed for de-duplication.
+	 * The agent reports these back to the model after the request (bounded).
+	 */
+	private actionNotes = new Map<string, string>()
+	private omittedActionNotes = 0
+
+	/**
+	 * Record a note for the model about an action that was skipped or partly applied.
+	 */
+	reportActionNote(key: string, note: string) {
+		if (this.actionNotes.has(key)) return
+		if (this.actionNotes.size >= MAX_ACTION_NOTES) {
+			this.omittedActionNotes++
+			return
+		}
+		this.actionNotes.set(key, note)
+	}
+
+	/**
+	 * Get the notes recorded during this request.
+	 */
+	getActionNotes(): { notes: string[]; omitted: number } {
+		return { notes: Array.from(this.actionNotes.values()), omitted: this.omittedActionNotes }
+	}
+
+	private getLockNode = (id: string): LockNode | undefined => {
+		const shape = this.editor.getShape(id as TLShapeId)
+		if (!shape) return undefined
+		return { id: shape.id, parentId: shape.parentId, isLocked: shape.isLocked }
+	}
+
+	/**
+	 * Whether a shape is protected from agent mutation by a user lock: the shape or one
+	 * of its ancestors is locked, and it isn't one of the agent's own (streaming-locked)
+	 * shapes from this prompt chain. With `includeDescendants`, a locked descendant also
+	 * protects the shape (used for deletion, which would remove the descendant too).
+	 */
+	isShapeProtected(id: SimpleShapeId, { includeDescendants = false } = {}): boolean {
+		const tlId = createShapeId(id)
+		const created = new Set<string>(this.agent.lints.getCreatedShapeIds())
+		if (getProtectingLockId(tlId, this.getLockNode, created) !== null) return true
+		if (!includeDescendants) return false
+		return hasProtectedDescendant(
+			tlId,
+			this.getLockNode,
+			(parentId) => this.editor.getSortedChildIdsForParent(parentId as TLShapeId),
+			created
+		)
+	}
+
+	/**
+	 * Report a shape that was skipped because it is locked.
+	 */
+	reportLockedShape(id: SimpleShapeId) {
+		this.reportActionNote(
+			`locked:${id}`,
+			`Skipped "${id}": it is locked by the user (or is inside/contains a locked shape). Leave it unchanged, or ask the user to unlock it if the change is required.`
+		)
+	}
+
+	/**
+	 * Ensure that a shape ID refers to a real shape that the agent is allowed to modify.
+	 * Locked shapes are skipped and reported back to the model.
+	 * @returns The real id, or null if the shape doesn't exist or is locked.
+	 */
+	ensureShapeIdIsEditable(
+		id: SimpleShapeId,
+		options: { includeDescendants?: boolean } = {}
+	): SimpleShapeId | null {
+		const shapeId = this.ensureShapeIdExists(id)
+		if (!shapeId) return null
+		if (this.isShapeProtected(shapeId, options)) {
+			this.reportLockedShape(shapeId)
+			return null
+		}
+		return shapeId
+	}
+
+	/**
+	 * Ensure that all shape IDs refer to real shapes that the agent is allowed to modify.
+	 * @returns The array of ids, with imaginary and locked ids removed.
+	 */
+	ensureShapeIdsAreEditable(
+		ids: SimpleShapeId[],
+		options: { includeDescendants?: boolean } = {}
+	): SimpleShapeId[] {
+		return ids.map((id) => this.ensureShapeIdIsEditable(id, options)).filter((v) => v !== null)
 	}
 
 	/**

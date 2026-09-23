@@ -18,7 +18,7 @@ export const PlaceActionUtil = registerActionUtil(
 		override sanitizeAction(action: Streaming<PlaceAction>, helpers: AgentHelpers) {
 			if (!action.complete) return action
 
-			const shapeId = helpers.ensureShapeIdExists(action.shapeId)
+			const shapeId = helpers.ensureShapeIdIsEditable(action.shapeId)
 			if (!shapeId) return null
 			action.shapeId = shapeId
 

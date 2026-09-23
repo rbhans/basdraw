@@ -4,8 +4,16 @@ import { createInterface } from 'node:readline'
 import { mkdir, readFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
+import { allowedOrigins, isTrustedOrigin, trustFailure } from './local-trust.mjs'
 
 const port = Number(process.env.BASDRAW_CODEX_PORT || 8791)
+// BASDRAW_CODEX_TURN_TIMEOUT_MS bounds one /generate turn (default 10 minutes).
+const turnTimeoutMs = Number(process.env.BASDRAW_CODEX_TURN_TIMEOUT_MS) > 0 ? Number(process.env.BASDRAW_CODEX_TURN_TIMEOUT_MS) : 10 * 60 * 1000
+const restartDelayMs = 10_000
+const maxSystemPromptChars = 1_000_000
+const maxInputItems = 2_000
+const maxModelChars = 200
+const origins = allowedOrigins()
 const runtimeRoot = path.join(os.tmpdir(), 'basdraw-codex-runtime')
 await mkdir(runtimeRoot, { recursive: true })
 
@@ -36,23 +44,54 @@ class CodexAppServerClient {
 		this.nextId = 0
 		this.pending = new Map()
 		this.listeners = new Set()
+		this.exitListeners = new Set()
+		this.failure = null
+		this.startedAt = Date.now()
 		this.child = spawn('codex', codexArgs, {
 			cwd: runtimeRoot,
 			stdio: ['pipe', 'pipe', 'pipe'],
 			env: process.env,
 		})
 
+		// ENOENT (Codex not installed) and EPIPE arrive as 'error' events; without
+		// listeners they would crash the bridge instead of reporting it unavailable.
+		this.child.on('error', (error) => {
+			this.fail(error.code === 'ENOENT'
+				? new Error('Codex CLI was not found on PATH. Install Codex and run codex login.')
+				: new Error(`Codex app-server failed: ${error.message}`))
+		})
+		this.child.stdin.on('error', (error) => this.fail(new Error(`Codex app-server input closed: ${error.message}`)))
 		createInterface({ input: this.child.stdout }).on('line', (line) => this.handleLine(line))
 		createInterface({ input: this.child.stderr }).on('line', (line) => {
 			if (!isBenignCodexNoise(line)) console.error(`[codex] ${line}`)
 		})
 		this.child.on('exit', (code, signal) => {
-			const error = new Error(`Codex app-server stopped${signal ? ` (${signal})` : ` with code ${code}`}.`)
-			for (const { reject } of this.pending.values()) reject(error)
-			this.pending.clear()
+			this.fail(new Error(`Codex app-server stopped${signal ? ` (${signal})` : ` with code ${code}`}.`))
 		})
 
 		this.ready = this.initialize()
+		this.ready.catch(() => undefined)
+	}
+
+	fail(error) {
+		if (!this.failure) {
+			this.failure = error
+			console.error(`basdraw Codex bridge: ${error.message}`)
+		}
+		for (const { reject } of this.pending.values()) reject(this.failure)
+		this.pending.clear()
+		for (const listener of this.exitListeners) listener(this.failure)
+		this.exitListeners.clear()
+	}
+
+	/** Called once when the app-server fails or exits; runs immediately if it already has. */
+	onExit(listener) {
+		if (this.failure) {
+			listener(this.failure)
+			return () => undefined
+		}
+		this.exitListeners.add(listener)
+		return () => this.exitListeners.delete(listener)
 	}
 
 	async initialize() {
@@ -69,11 +108,18 @@ class CodexAppServerClient {
 	}
 
 	requestRaw(method, params = undefined) {
+		if (this.failure) return Promise.reject(this.failure)
 		const id = ++this.nextId
 		const message = { method, id }
 		if (params !== undefined) message.params = params
-		this.write(message)
-		return new Promise((resolve, reject) => this.pending.set(String(id), { resolve, reject }))
+		const promise = new Promise((resolve, reject) => this.pending.set(String(id), { resolve, reject }))
+		try {
+			this.write(message)
+		} catch (error) {
+			this.pending.delete(String(id))
+			return Promise.reject(error)
+		}
+		return promise
 	}
 
 	notify(method, params = undefined) {
@@ -88,6 +134,7 @@ class CodexAppServerClient {
 	}
 
 	write(message) {
+		if (this.failure) throw this.failure
 		if (!this.child.stdin.writable) throw new Error('Codex app-server is not writable.')
 		this.child.stdin.write(`${JSON.stringify(message)}\n`)
 	}
@@ -110,7 +157,8 @@ class CodexAppServerClient {
 		}
 
 		if (message.id !== undefined && message.method) {
-			this.write({ id: message.id, error: { code: -32601, message: 'basdraw does not expose interactive Codex tools.' } })
+			try { this.write({ id: message.id, error: { code: -32601, message: 'basdraw does not expose interactive Codex tools.' } }) }
+			catch { /* The exit handler reports the failure. */ }
 			return
 		}
 
@@ -118,7 +166,7 @@ class CodexAppServerClient {
 	}
 
 	stop() {
-		if (!this.child.killed) this.child.kill('SIGTERM')
+		if (this.child.exitCode === null && this.child.signalCode === null) this.child.kill('SIGTERM')
 	}
 }
 
@@ -140,21 +188,41 @@ async function getDisabledMcpArgs() {
 	}
 }
 
-const codex = new CodexAppServerClient()
+let stopping = false
+let codex = new CodexAppServerClient()
+
+/** Restarts a failed app-server (e.g. Codex installed after launch), at most every few seconds. */
+function currentCodex() {
+	if (codex.failure && !stopping && Date.now() - codex.startedAt > restartDelayMs) codex = new CodexAppServerClient()
+	return codex
+}
+
+const activeResponses = new Set()
 
 const server = createServer(async (request, response) => {
-	setCors(response)
+	// Loopback peer + exact loopback Host (blocks DNS rebinding) + allowlisted Origin if present.
+	const failure = trustFailure(request, { port, origins })
+	if (failure) {
+		json(response, 403, { error: 'This bridge accepts only local basdraw requests.' })
+		return
+	}
+	setCors(request, response)
 	if (request.method === 'OPTIONS') {
 		response.writeHead(204).end()
 		return
 	}
-	if (!isLoopback(request.socket.remoteAddress) || request.headers['x-basdraw-codex'] !== '1') {
+	if (request.headers['x-basdraw-codex'] !== '1') {
 		json(response, 403, { error: 'This bridge accepts only local basdraw requests.' })
 		return
 	}
 
+	const codex = currentCodex()
 	try {
 		if (request.method === 'GET' && request.url === '/status') {
+			if (codex.failure) {
+				json(response, 200, { available: false, authenticated: false, authMode: null, planType: null, models: [], error: codex.failure.message })
+				return
+			}
 			const [accountResult, modelResult] = await Promise.all([
 				codex.request('account/read', { refreshToken: false }),
 				codex.request('model/list', { limit: 100, includeHidden: false }),
@@ -198,7 +266,7 @@ const server = createServer(async (request, response) => {
 
 		if (request.method === 'POST' && request.url === '/generate') {
 			const body = await readJson(request, 24 * 1024 * 1024)
-			await generate(body, request, response)
+			await generate(codex, body, request, response)
 			return
 		}
 
@@ -209,9 +277,28 @@ const server = createServer(async (request, response) => {
 	}
 })
 
-async function generate(body, request, response) {
-	if (!body || typeof body.systemPrompt !== 'string' || !Array.isArray(body.input) || !body.outputSchema) {
-		json(response, 400, { error: 'systemPrompt, input and outputSchema are required.' })
+function validateGenerateBody(body) {
+	if (!body || typeof body !== 'object' || Array.isArray(body)) return 'Expected a JSON object.'
+	if (typeof body.systemPrompt !== 'string' || body.systemPrompt.length > maxSystemPromptChars) return `systemPrompt must be a string of at most ${maxSystemPromptChars} characters.`
+	if (body.model !== undefined && (typeof body.model !== 'string' || body.model.length > maxModelChars)) return `model must be a string of at most ${maxModelChars} characters.`
+	if (body.effort !== undefined && (typeof body.effort !== 'string' || !/^[a-z]{1,16}$/.test(body.effort))) return 'effort must be a reasoning effort name.'
+	if (!body.outputSchema || typeof body.outputSchema !== 'object' || Array.isArray(body.outputSchema)) return 'outputSchema must be a JSON schema object.'
+	if (!Array.isArray(body.input) || body.input.length === 0 || body.input.length > maxInputItems) return `input must be a list of 1-${maxInputItems} items.`
+	for (const item of body.input) {
+		if (!item || typeof item !== 'object') return 'Each input item must be an object.'
+		if (item.type === 'text' && typeof item.text === 'string' && Object.keys(item).length === 2) continue
+		// Canvas screenshots arrive as inline data URLs. Remote or file URLs would let a
+		// request make Codex fetch arbitrary resources, so they are rejected.
+		if (item.type === 'image' && typeof item.url === 'string' && /^data:image\/(png|jpeg|webp|gif);base64,/i.test(item.url) && Object.keys(item).length === 2) continue
+		return 'Input items must be text, or images supplied as data:image URLs.'
+	}
+	return null
+}
+
+async function generate(codex, body, request, response) {
+	const invalid = validateGenerateBody(body)
+	if (invalid) {
+		json(response, 400, { error: invalid })
 		return
 	}
 
@@ -238,6 +325,10 @@ async function generate(body, request, response) {
 	})
 	const threadId = threadResult?.thread?.id
 	if (!threadId) throw new Error('Codex did not create a thread.')
+	if (response.destroyed) {
+		void codex.request('thread/unsubscribe', { threadId }).catch(() => undefined)
+		return
+	}
 
 	response.writeHead(200, {
 		'Content-Type': 'application/x-ndjson; charset=utf-8',
@@ -247,26 +338,53 @@ async function generate(body, request, response) {
 
 	let turnId = null
 	let finished = false
-	const stopListening = codex.onNotification((message) => {
+	let clientGone = false
+	let timer = null
+	let stopListening = () => undefined
+	let stopExitListener = () => undefined
+	const interrupt = () => {
+		if (turnId) void codex.request('turn/interrupt', { threadId, turnId }).catch(() => undefined)
+	}
+	// Every exit path (completion, Codex exit, timeout, shutdown, client disconnect) runs this once.
+	const finish = (errorMessage = null) => {
+		if (finished) return
+		finished = true
+		clearTimeout(timer)
+		stopListening()
+		stopExitListener()
+		activeResponses.delete(active)
+		if (!response.writableEnded && !response.destroyed) {
+			if (errorMessage) response.write(`${JSON.stringify({ error: errorMessage })}\n`)
+			response.end()
+		}
+		if (!codex.failure) void codex.request('thread/unsubscribe', { threadId }).catch(() => undefined)
+	}
+	const active = { finish }
+	activeResponses.add(active)
+	timer = setTimeout(() => {
+		interrupt()
+		finish(`Codex turn timed out after ${Math.round(turnTimeoutMs / 1000)} seconds.`)
+	}, turnTimeoutMs)
+
+	stopListening = codex.onNotification((message) => {
 		if (message?.params?.threadId !== threadId) return
 		if (message.method === 'item/agentMessage/delta' && typeof message.params.delta === 'string') {
-			response.write(`${JSON.stringify({ delta: message.params.delta })}\n`)
+			if (!finished && !response.writableEnded) response.write(`${JSON.stringify({ delta: message.params.delta })}\n`)
 		}
 		if (message.method === 'turn/completed' && (!turnId || message.params.turn?.id === turnId)) {
-			finished = true
 			const turn = message.params.turn
-			if (turn?.status === 'failed') response.write(`${JSON.stringify({ error: turn.error?.message || 'Codex turn failed.' })}\n`)
-			else if (turn?.status === 'interrupted') response.write(`${JSON.stringify({ error: 'Codex turn was interrupted.' })}\n`)
-			response.end()
-			stopListening()
-			void codex.request('thread/unsubscribe', { threadId }).catch(() => undefined)
+			if (turn?.status === 'failed') finish(turn.error?.message || 'Codex turn failed.')
+			else if (turn?.status === 'interrupted') finish('Codex turn was interrupted.')
+			else finish()
 		}
 	})
+	stopExitListener = codex.onExit((error) => finish(error.message || 'Codex app-server stopped.'))
 
 	response.on('close', () => {
 		if (finished) return
-		stopListening()
-		if (turnId) void codex.request('turn/interrupt', { threadId, turnId }).catch(() => undefined)
+		clientGone = true
+		interrupt()
+		finish()
 	})
 
 	try {
@@ -277,10 +395,10 @@ async function generate(body, request, response) {
 			effort: body.effort || 'low',
 		})
 		turnId = turnResult?.turn?.id || null
+		// The client may have disconnected while turn/start was in flight.
+		if (clientGone) interrupt()
 	} catch (error) {
-		stopListening()
-		response.write(`${JSON.stringify({ error: error instanceof Error ? error.message : 'Codex turn failed.' })}\n`)
-		response.end()
+		finish(error instanceof Error ? error.message : 'Codex turn failed.')
 	}
 }
 
@@ -310,24 +428,26 @@ function json(response, status, value) {
 	response.end(JSON.stringify(value))
 }
 
-function setCors(response) {
-	response.setHeader('Access-Control-Allow-Origin', 'http://127.0.0.1:5173')
+function setCors(request, response) {
+	const origin = request.headers.origin
+	if (!origin || !isTrustedOrigin(origin, origins)) return
+	response.setHeader('Access-Control-Allow-Origin', origin)
+	response.setHeader('Vary', 'Origin')
 	response.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Basdraw-Codex')
 	response.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
 }
 
-function isLoopback(address) {
-	return address === '127.0.0.1' || address === '::1' || address === '::ffff:127.0.0.1'
-}
-
 server.listen(port, '127.0.0.1', () => console.log(`basdraw Codex subscription bridge listening on http://127.0.0.1:${port}`))
 
-let stopping = false
 function stop() {
 	if (stopping) return
 	stopping = true
+	for (const active of [...activeResponses]) active.finish('The Codex bridge is shutting down.')
 	server.close()
+	server.closeAllConnections?.()
 	codex.stop()
+	// Force exit if the app-server or a socket keeps the event loop alive.
+	setTimeout(() => process.exit(0), 3_000).unref()
 }
 process.on('SIGINT', stop)
 process.on('SIGTERM', stop)

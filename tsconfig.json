@@ -1,5 +1,6 @@
 {
 	"compilerOptions": {
+		"allowImportingTsExtensions": true,
 		"outDir": "./.tsbuild",
 		"types": [
 			"@cloudflare/workers-types",

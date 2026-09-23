@@ -1,20 +1,21 @@
 import type { IRequest } from 'itty-router'
 import { createKnowledgeEntrySchema, updateKnowledgeEntrySchema } from '../knowledge/schemas'
-import { KnowledgeStore } from '../knowledge/KnowledgeStore'
+import { KnowledgeStore, MAX_SCOPE_IDS } from '../knowledge/KnowledgeStore'
 import type { Environment } from '../environment'
 import type { KnowledgeKind, KnowledgeScopeType } from '../knowledge/types'
 import { z } from 'zod'
 import { KnowledgeAction } from '../../shared/schema/AgentActionSchemas'
 import { knowledgeBundles } from '../../shared/knowledge/bundles'
 import { KnowledgeService } from '../knowledge/KnowledgeService'
+import { authorizeRequest } from '../requestTrust'
 
 const retrievalSchema = z.object({
 	scope: z.object({
 		projectId: z.string().max(200).nullable(),
 		connectionId: z.string().max(200).nullable(),
-		pluginIds: z.array(z.string().max(120)).max(100),
-		connectionIds: z.array(z.string().max(200)).max(100).optional(),
-		connectionTypes: z.array(z.string().max(120)).max(100).optional(),
+		pluginIds: z.array(z.string().max(120)).max(MAX_SCOPE_IDS),
+		connectionIds: z.array(z.string().max(200)).max(MAX_SCOPE_IDS).optional(),
+		connectionTypes: z.array(z.string().max(120)).max(MAX_SCOPE_IDS).optional(),
 	}),
 	request: KnowledgeAction,
 })
@@ -42,13 +43,22 @@ export async function listKnowledge(request: IRequest, env: Environment) {
 	if (enabled instanceof Response || kind instanceof Response || scopeType instanceof Response) {
 		return enabled instanceof Response ? enabled : kind instanceof Response ? kind : scopeType
 	}
-	const entries = await new KnowledgeStore(env.KNOWLEDGE_DB).list({
-		enabled,
-		kind: kind as KnowledgeKind | undefined,
-		scopeType: scopeType as KnowledgeScopeType | undefined,
-		scopeId: url.searchParams.get('scopeId') || undefined,
-	})
-	return json({ entries })
+	const limit = url.searchParams.get('limit')
+	if (limit !== null && !/^\d{1,3}$/.test(limit)) return json({ error: 'limit must be a whole number up to 100.' }, 400)
+	try {
+		const page = await new KnowledgeStore(env.KNOWLEDGE_DB).list({
+			enabled,
+			kind: kind as KnowledgeKind | undefined,
+			scopeType: scopeType as KnowledgeScopeType | undefined,
+			scopeId: url.searchParams.get('scopeId') || undefined,
+			cursor: url.searchParams.get('cursor') || undefined,
+			limit: limit === null ? undefined : Number(limit),
+		})
+		return json(page)
+	} catch (cause) {
+		if (cause instanceof Error && cause.message.includes('cursor')) return json({ error: cause.message }, 400)
+		throw cause
+	}
 }
 
 export async function getKnowledge(request: IRequest, env: Environment) {
@@ -65,9 +75,9 @@ export async function previewKnowledgeContext(request: IRequest, env: Environmen
 	const catalog = await new KnowledgeService(new KnowledgeStore(env.KNOWLEDGE_DB), knowledgeBundles).catalog({
 		projectId: url.searchParams.get('projectId'),
 		connectionId: url.searchParams.get('connectionId'),
-		pluginIds: (url.searchParams.get('pluginIds') ?? '').split(',').map((id) => id.trim()).filter(Boolean),
-		connectionIds: (url.searchParams.get('connectionIds') ?? '').split(',').filter(Boolean),
-		connectionTypes: (url.searchParams.get('connectionTypes') ?? '').split(',').filter(Boolean),
+		pluginIds: listParam(url, 'pluginIds'),
+		connectionIds: listParam(url, 'connectionIds'),
+		connectionTypes: listParam(url, 'connectionTypes'),
 	})
 	return json(catalog)
 }
@@ -106,18 +116,13 @@ export async function deleteKnowledge(request: IRequest, env: Environment) {
 	return removed ? new Response(null, { status: 204 }) : json({ error: 'Knowledge entry not found.' }, 404)
 }
 
-function authorizeKnowledgeAdmin(request: Request, env: Environment) {
-	const requestUrl = new URL(request.url)
-	if (requestUrl.hostname === '127.0.0.1' || requestUrl.hostname === 'localhost') {
-		const origin = request.headers.get('Origin')
-		if (!origin || origin === requestUrl.origin) return null
-		return json({ error: 'Cross-origin knowledge administration is not allowed.' }, 403)
-	}
-	if (!env.KNOWLEDGE_ADMIN_TOKEN) return json({ error: 'Knowledge administration is not configured.' }, 503)
-	const authorization = request.headers.get('Authorization')
-	return authorization === `Bearer ${env.KNOWLEDGE_ADMIN_TOKEN}`
-		? null
-		: json({ error: 'Unauthorized.' }, 401, { 'WWW-Authenticate': 'Bearer' })
+/** Kept for existing callers; the policy is shared with /stream, /agent/* and the audit routes. */
+export function authorizeKnowledgeAdmin(request: Request, env: Environment) {
+	return authorizeRequest(request, env)
+}
+
+function listParam(url: URL, name: string) {
+	return (url.searchParams.get(name) ?? '').split(',').map((id) => id.trim()).filter(Boolean).slice(0, MAX_SCOPE_IDS)
 }
 
 async function readJson(request: Request) {

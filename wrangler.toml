@@ -1,8 +1,14 @@
-name = "agent-template"
+# Renamed from the starter kit's "agent-template". The Vite build writes dist/basdraw/.
+# Local Durable Object state lives under .wrangler/state/v3/do/<name>-AgentDurableObject; the
+# agent DO keeps no persistent state, so nothing is lost by the rename.
+name = "basdraw"
 main = "worker/worker.ts"
 compatibility_date = "2024-12-30"
+# Lets the agent Durable Object observe client disconnects through request.signal.
+compatibility_flags = ["enable_request_signal"]
 assets = { not_found_handling = "single-page-application" }
-preview_urls = true
+# Preview URLs would expose the privileged routes on a public *.workers.dev host.
+preview_urls = false
 
 [observability]
 enabled = true
@@ -10,21 +16,25 @@ enabled = true
 [[d1_databases]]
 binding = "KNOWLEDGE_DB"
 database_name = "basdraw-knowledge"
-# Local development uses an isolated SQLite-backed D1 database. Replace this
-# placeholder with the id from `wrangler d1 create basdraw-knowledge` before deployment.
+# Local development uses an isolated SQLite-backed D1 database.
+# BEFORE DEPLOYING: this database_id is a placeholder. Replace it with the id from
+# `wrangler d1 create basdraw-knowledge`, and set BASDRAW_API_TOKEN as a secret
+# (`wrangler secret put BASDRAW_API_TOKEN`); non-loopback hosts reject requests without it.
 database_id = "00000000-0000-0000-0000-000000000001"
 preview_database_id = "basdraw-knowledge-local"
 migrations_dir = "migrations"
 
-[[routes]]
-pattern = "agent.templates.tldraw.dev"
-custom_domain = true
+# No [[routes]]: the starter kit's custom domain was removed. Add your own route when deploying.
 
 # Set up the durable object used for each tldraw room
 [durable_objects]
 bindings = [{ name = "AGENT_DURABLE_OBJECT", class_name = "AgentDurableObject" }]
 
-# Durable objects require migrations to create/modify/delete them
+# Durable objects require migrations to create/modify/delete them.
+# Do not edit or reorder these entries: existing local and deployed state depends on them.
+# Note: v1 used `new_classes` (KV-backed storage). A brand-new deployment may prefer
+# `new_sqlite_classes`, but that must be decided before the first deploy; the storage
+# backend of an existing class cannot be switched by editing this history.
 [[migrations]]
 tag = "v1"
 new_classes = ["TldrawAiDurableObject"]

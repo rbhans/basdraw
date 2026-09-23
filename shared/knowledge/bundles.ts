@@ -8,6 +8,7 @@ import {
 	webViewKnowledge,
 } from './canvasAgent'
 import { relationshipKnowledge } from './relationships'
+import { documentKnowledge } from './documents'
 
 /** Shared installation catalog, imported by both plugin registration and Worker. */
 export const knowledgeBundles: readonly PluginKnowledgeBundle[] = [
@@ -18,6 +19,7 @@ export const knowledgeBundles: readonly PluginKnowledgeBundle[] = [
 	vectorPdfKnowledge,
 	webViewKnowledge,
 	relationshipKnowledge,
+	documentKnowledge,
 ]
 
 const ids = new Set<string>()

@@ -1,7 +1,7 @@
-import type { Editor, JsonObject, TLShape, TLShapeId } from 'tldraw'
+import type { Editor, JsonObject, RecordsDiff, TLRecord, TLShape, TLShapeId } from 'tldraw'
 import type { BasDocumentAction, CanvasDocument, ShapeBinding } from './types'
-import { migrateBinding } from './storage'
-import { behaviorConflict } from './behaviorDefinitions'
+import { migrateBinding, optionsMatchProperty } from './storage.ts'
+import { behaviorConflict } from './behaviorDefinitions.ts'
 
 function bindingEntries(shape: TLShape) {
 	const values = Array.isArray(shape.meta.basBindings) ? shape.meta.basBindings : []
@@ -75,6 +75,8 @@ export function dispatchShapeBindingAction(editor: Editor, action: BasDocumentAc
 	} else if (action.type === 'update_binding' && previous?.binding) {
 		candidate = { ...previous.binding, ...action.patch, id: previous.binding.id, shapeId: shape.id }
 	}
+	// Changing the effect without new options must not carry the old effect's options (label settings on a rotation).
+	if (candidate && !optionsMatchProperty(candidate.runtimeProperty, candidate.options)) candidate = { ...candidate, options: undefined }
 	if (candidate) {
 		const conflict = behaviorConflict(candidate, bindingsFromShape(shape))
 		if (conflict) return conflict
@@ -99,4 +101,37 @@ export function dispatchShapeBindingAction(editor: Editor, action: BasDocumentAc
 function writeEntries(editor: Editor, shape: TLShape, values: unknown[]) {
 	const meta = JSON.parse(JSON.stringify({ ...shape.meta, basBindings: values })) as JsonObject
 	editor.updateShape({ id: shape.id, type: shape.type, meta })
+}
+
+/**
+ * True when a store change can alter the binding projection: shapes carrying bindings
+ * were added or removed, a shape's `basBindings` changed, or the station alias changed.
+ * Pointer moves, drags and resizes do not rebuild the projection.
+ */
+export function bindingDocumentChanged(changes: RecordsDiff<TLRecord>) {
+	for (const record of Object.values(changes.added)) if (hasBindings(record)) return true
+	for (const record of Object.values(changes.removed)) if (hasBindings(record)) return true
+	for (const [from, to] of Object.values(changes.updated)) {
+		if (to.typeName === 'shape' && from.typeName === 'shape' && from.meta.basBindings !== to.meta.basBindings) return true
+		if (to.typeName === 'document' && from.typeName === 'document' && from.meta.basStationAlias !== to.meta.basStationAlias) return true
+	}
+	return false
+}
+
+function hasBindings(record: TLRecord) {
+	return record.typeName === 'shape' && Array.isArray(record.meta.basBindings) && record.meta.basBindings.length > 0
+}
+
+/** Structural equality for JSON-like binding projections, without serializing either side. */
+export function sameBindingDocument(a: CanvasDocument, b: CanvasDocument) {
+	return a.stationAlias === b.stationAlias && a.bindings.length === b.bindings.length && a.bindings.every((binding, index) => jsonEqual(binding, b.bindings[index]))
+}
+
+function jsonEqual(a: unknown, b: unknown): boolean {
+	if (Object.is(a, b)) return true
+	if (!a || !b || typeof a !== 'object' || typeof b !== 'object' || Array.isArray(a) !== Array.isArray(b)) return false
+	const left = a as Record<string, unknown>, right = b as Record<string, unknown>
+	const keys = Object.keys(left).filter((key) => left[key] !== undefined)
+	if (keys.length !== Object.keys(right).filter((key) => right[key] !== undefined).length) return false
+	return keys.every((key) => jsonEqual(left[key], right[key]))
 }

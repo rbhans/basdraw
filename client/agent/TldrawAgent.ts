@@ -1,4 +1,4 @@
-import { Editor, RecordsDiff, reverseRecordsDiff, structuredClone, TLRecord } from 'tldraw'
+import { Editor, JsonValue, RecordsDiff, reverseRecordsDiff, structuredClone, TLRecord } from 'tldraw'
 import { allowsAgentAction, type BasdrawAccessPolicy } from '../../shared/access'
 import { convertTldrawShapeToFocusedShape } from '../../shared/format/convertTldrawShapeToFocusedShape'
 import { AgentModelName, AgentReasoningEffort } from '../../shared/models'
@@ -14,6 +14,7 @@ import { TodoItem } from '../../shared/types/TodoItem'
 import { AgentHelpers } from '../AgentHelpers'
 import { getModeNode } from '../modes/AgentModeChart'
 import { AgentModeType } from '../modes/AgentModeDefinitions'
+import { stripHistoryDiffsForPersistence } from '../parts/chatHistoryBounds'
 import { getPromptPartUtilsRecord, PromptPartUtil } from '../parts/PromptPartUtil'
 import { AgentActionManager } from './managers/AgentActionManager'
 import { AgentChatManager } from './managers/AgentChatManager'
@@ -26,8 +27,20 @@ import { AgentModeManager } from './managers/AgentModeManager'
 import { AgentRequestManager } from './managers/AgentRequestManager'
 import { AgentTodoManager } from './managers/AgentTodoManager'
 import { AgentUserActionTracker } from './managers/AgentUserActionTracker'
-import { agentPluginRuntime } from '../plugins/AgentPluginRuntime'
-import { connectionApprovalRuntime } from '../connections/ConnectionApprovalRuntime'
+import { AgentStopReason, runAgentExtensionHook, TldrawAgentExtension } from './AgentExtension'
+import {
+	capContinuationData,
+	createPromptChainState,
+	decideContinuation,
+	MAX_AUTOMATIC_CONTINUATIONS,
+	MAX_CHAIN_CONTINUATIONS,
+	PromptChainState,
+} from './promptChainPolicy'
+
+/**
+ * How a single request ended.
+ */
+export type AgentRequestOutcome = 'completed' | 'cancelled' | 'errored'
 
 /**
  * The persisted state of an agent.
@@ -51,6 +64,11 @@ export interface TldrawAgentOptions {
 	/** A callback for when an error occurs. */
 	onError: (e: any) => void
 	accessPolicy: BasdrawAccessPolicy
+	/**
+	 * Lifecycle extensions that let app features (connections, plugins, ...) hook into the
+	 * agent without editing it. Omit an extension to disable that feature's hooks.
+	 */
+	extensions?: readonly TldrawAgentExtension[]
 }
 
 /**
@@ -75,6 +93,12 @@ export class TldrawAgent {
 	onError: (e: any) => void
 
 	private accessPolicy: BasdrawAccessPolicy
+
+	/** Lifecycle extensions registered for this agent. */
+	readonly extensions: readonly TldrawAgentExtension[]
+
+	/** The state of the current prompt chain (a user prompt and its automatic follow-ups). */
+	private promptChain: PromptChainState = createPromptChainState()
 
 	// ==================== Managers ====================
 
@@ -132,11 +156,12 @@ export class TldrawAgent {
 	/**
 	 * Create a new tldraw agent.
 	 */
-	constructor({ editor, id, onError, accessPolicy }: TldrawAgentOptions) {
+	constructor({ editor, id, onError, accessPolicy, extensions = [] }: TldrawAgentOptions) {
 		this.editor = editor
 		this.id = id
 		this.onError = onError
 		this.accessPolicy = accessPolicy
+		this.extensions = extensions
 
 		// Initialize managers
 		// Note: mode must be initialized before actions, since actions depends on mode
@@ -169,7 +194,8 @@ export class TldrawAgent {
 	 */
 	serializeState(): PersistedAgentState {
 		return {
-			chatHistory: this.chat.getHistory(),
+			// Old and very large diffs are dropped to keep saved state small
+			chatHistory: stripHistoryDiffsForPersistence(this.chat.getHistory()),
 			chatOrigin: this.chatOrigin.getOrigin(),
 			todoList: this.todos.getTodos(),
 			contextItems: this.context.getItems(),
@@ -260,7 +286,9 @@ export class TldrawAgent {
 	setAccessPolicy(policy: BasdrawAccessPolicy) {
 		const previous = this.accessPolicy
 		this.accessPolicy = policy
-		if (policy.connections !== 'write') connectionApprovalRuntime.cancelOwner(this.id)
+		runAgentExtensionHook(this.extensions, (extension) =>
+			extension.onAccessPolicyChange?.(this, policy, previous)
+		)
 		if (this.requests?.isGenerating() && previous.profileId !== policy.profileId) this.cancel()
 	}
 
@@ -269,8 +297,9 @@ export class TldrawAgent {
 		if (!definition.active) return []
 		return (definition.actions as readonly AgentAction['_type'][]).filter((type) => {
 			if (!allowsAgentAction(this.accessPolicy, getActionAccess(type))) return false
-			if (type === 'pluginContent' && !agentPluginRuntime.hasCapabilities()) return false
-			return true
+			return this.extensions.every(
+				(extension) => extension.isActionAvailable?.(this, type) ?? true
+			)
 		})
 	}
 
@@ -345,16 +374,27 @@ export class TldrawAgent {
 		this.requests.setIsPrompting(true)
 
 		const request = this.requests.getFullRequestFromInput(input)
-		const startingNode = this.mode.getCurrentModeNode()
-		startingNode.onPromptStart?.(this, request)
+		if (!nested) this.promptChain = createPromptChainState()
 
 		// Submit the request to the agent.
+		let outcome: AgentRequestOutcome
 		try {
-			await this.request(request)
+			const startingNode = this.mode.getCurrentModeNode()
+			startingNode.onPromptStart?.(this, request)
+			outcome = await this.request(request)
 		} catch (e) {
-			console.error('Error data:', e)
-			this.requests.setIsPrompting(false)
-			this.requests.setCancelFn(null)
+			this.onError(e)
+			this.endPromptChain(request)
+			return
+		}
+
+		if (outcome === 'errored') this.promptChain.errored = true
+
+		// After an error, only an explicit user message (e.g. an interrupt) may continue the chain.
+		// Automatic follow-ups would just repeat the failing request (429, 401, context length...).
+		const scheduledByActions = this.requests.getScheduledRequest()
+		if (this.promptChain.errored && scheduledByActions?.source !== 'user') {
+			this.endPromptChain(request)
 			return
 		}
 
@@ -372,30 +412,78 @@ export class TldrawAgent {
 
 		// If there's still no scheduled request, quit
 		const scheduledRequest = this.requests.getScheduledRequest()
-		const eventualModeType = this.mode.getCurrentModeType()
-		const eventualModeDefinition = this.mode.getCurrentModeDefinition()
 		if (!scheduledRequest) {
-			if (eventualModeDefinition.active) {
-				throw new Error(
-					`Agent is not allowed to become inactive during the active mode: ${eventualModeType}`
+			if (this.mode.getCurrentModeDefinition().active) {
+				console.error(
+					`Agent is not allowed to become inactive during the active mode: ${this.mode.getCurrentModeType()}`
 				)
 			}
-			this.requests.setIsPrompting(false)
-			this.requests.setCancelFn(null)
+			this.endPromptChain(request)
+			return
+		}
+
+		// Guard against runaway chains: cap automatic follow-ups for this user prompt.
+		const decision = decideContinuation(this.promptChain, {
+			source: scheduledRequest.source,
+			automatic: !scheduledByActions,
+		})
+		if (!decision.continue) {
+			if (decision.reason !== 'error') {
+				const limit =
+					decision.reason === 'automatic-limit'
+						? MAX_AUTOMATIC_CONTINUATIONS
+						: MAX_CHAIN_CONTINUATIONS
+				this.onError(
+					`Canvas AI paused after ${limit} automatic follow-ups. Send a message to let it continue.`
+				)
+			}
+			this.endPromptChain(request)
 			return
 		}
 
 		// If there *is* a scheduled request...
-		// Add the scheduled request to chat history
-		const resolvedData = await Promise.all(scheduledRequest.data)
+		// Resolve and bound its data, then add it to chat history
+		const generation = this.cancellationGeneration
+		const resolvedData = capContinuationData(await resolveRequestData(scheduledRequest.data))
+
+		// If the agent was cancelled or interrupted while the data resolved, follow whatever
+		// replaced the scheduled request instead (e.g. the user's new message), if anything.
+		if (generation !== this.cancellationGeneration) {
+			const replacement = this.requests.getScheduledRequest()
+			this.requests.clearScheduledRequest()
+			if (!replacement) {
+				this.endPromptChain(request)
+				return
+			}
+			await this.prompt(replacement, { nested: true })
+			return
+		}
+
 		this.chat.push({
 			type: 'continuation',
-			data: resolvedData,
+			data: resolvedData as JsonValue[],
 		})
 
 		// Handle the scheduled request and clear it
 		this.requests.clearScheduledRequest()
-		await this.prompt(scheduledRequest, { nested: true })
+		await this.prompt({ ...scheduledRequest, data: resolvedData as JsonValue[] }, { nested: true })
+	}
+
+	/**
+	 * End the current prompt chain: drop any follow-up, leave the active mode and go idle.
+	 */
+	private endPromptChain(request: AgentRequest) {
+		this.requests.clearScheduledRequest()
+		if (this.requests.getActiveRequest() === request) this.requests.clearActiveRequest()
+		if (this.mode.getCurrentModeDefinition().active) {
+			try {
+				this.mode.getCurrentModeNode().onPromptCancel?.(this, request)
+			} catch (e) {
+				console.error('Failed to leave the active mode:', e)
+			}
+		}
+		this.requests.setIsPrompting(false)
+		this.requests.setCancelFn(null)
 	}
 
 	/**
@@ -412,7 +500,7 @@ export class TldrawAgent {
 	 * @returns A promise for when the request is complete and a cancel function
 	 * to abort the request.
 	 */
-	async request(input: AgentInput) {
+	async request(input: AgentInput): Promise<AgentRequestOutcome> {
 		const request = this.requests.getFullRequestFromInput(input)
 
 		// Interrupt any currently active request
@@ -421,15 +509,19 @@ export class TldrawAgent {
 		}
 		this.requests.setActiveRequest(request)
 
-		// Call an external helper function to request the agent
-		const { promise, cancel } = this.requestAgentActions(request)
+		try {
+			// Call an external helper function to request the agent
+			const { promise, cancel } = this.requestAgentActions(request)
 
-		this.requests.setCancelFn(cancel)
+			this.requests.setCancelFn(cancel)
 
-		const results = await promise
-		this.requests.clearActiveRequest()
-
-		return results
+			return await promise
+		} finally {
+			// Don't clear a newer request that replaced this one
+			if (this.requests.getActiveRequest() === request) {
+				this.requests.clearActiveRequest()
+			}
+		}
 	}
 
 	/**
@@ -527,10 +619,15 @@ export class TldrawAgent {
 	/**
 	 * Interrupt the agent and set their mode.
 	 * Optionally, schedule a request.
+	 *
+	 * Unlike `cancel`, this keeps the agent's current mode (so an interrupting request can
+	 * continue the same working session), but it still abandons all in-flight work: the
+	 * stream is aborted, the cancellation generation is bumped and extensions drop anything
+	 * pending (such as connection write approvals), so late results can't act on stale input.
 	 */
 	interrupt({ input, mode }: { input: AgentInput | null; mode?: AgentModeType }) {
-		this.requests.cancel()
-		if (mode) {
+		this.stopInFlightWork('interrupt')
+		if (mode && mode !== this.mode.getCurrentModeType()) {
 			this.mode.setMode(mode)
 		}
 		if (input !== null) {
@@ -541,13 +638,33 @@ export class TldrawAgent {
 	// ==================== Cancel & Reset ====================
 
 	/**
+	 * Incremented whenever in-flight work is abandoned (cancel or interrupt).
+	 * Async actions capture it and drop their results if it changed.
+	 */
+	private cancellationGeneration = 0
+	getCancellationGeneration() { return this.cancellationGeneration }
+
+	/**
+	 * Abandon all in-flight work: bump the generation, let extensions drop pending work,
+	 * abort the stream and clear the active and scheduled requests.
+	 */
+	private stopInFlightWork(reason: AgentStopReason, beforeAbort?: () => void) {
+		this.cancellationGeneration++
+		runAgentExtensionHook(this.extensions, (extension) => extension.onStop?.(this, reason))
+		try {
+			beforeAbort?.()
+		} finally {
+			this.requests.cancel()
+		}
+	}
+
+	/**
 	 * Cancel the agent's current prompt, if one is active.
 	 */
 	cancel() {
-		connectionApprovalRuntime.cancelOwner(this.id)
 		const activeRequest = this.requests.getActiveRequest()
-
-		if (activeRequest) {
+		this.stopInFlightWork('cancel', () => {
+			if (!activeRequest) return
 			const modeType = this.mode.getCurrentModeType()
 			const modeNode = getModeNode(modeType)
 			modeNode.onPromptCancel?.(this, activeRequest)
@@ -558,9 +675,7 @@ export class TldrawAgent {
 					`Agent is not allowed to become inactive during the active mode: ${this.mode.getCurrentModeType()}`
 				)
 			}
-		}
-
-		this.requests.cancel()
+		})
 	}
 
 	/**
@@ -620,11 +735,12 @@ export class TldrawAgent {
 
 		const availableActions = this.getAvailableActionTypes()
 
-		const requestPromise = (async () => {
-			const prompt = await this.preparePrompt(request, helpers)
+		const requestPromise = (async (): Promise<AgentRequestOutcome> => {
 			let incompleteDiff: RecordsDiff<TLRecord> | null = null
 			const actionPromises: Promise<void>[] = []
 			try {
+				const prompt = await this.preparePrompt(request, helpers)
+				if (cancelled) return 'cancelled'
 				for await (const action of this.streamAgentActions({ prompt, signal })) {
 					if (cancelled) break
 
@@ -686,11 +802,21 @@ export class TldrawAgent {
 					}
 				}
 				await Promise.all(actionPromises)
+				if (cancelled) return 'cancelled'
+				this.reportActionNotes(helpers)
+				return 'completed'
 			} catch (e) {
-				if (e === 'Cancelled by user' || (e instanceof Error && e.name === 'AbortError')) {
-					return
+				// Always tear down the stream when the action loop exits via an exception
+				controller.abort('Request failed')
+				if (
+					cancelled ||
+					e === 'Cancelled by user' ||
+					(e instanceof Error && e.name === 'AbortError')
+				) {
+					return 'cancelled'
 				}
 				this.onError(e)
+				return 'errored'
 			}
 		})()
 
@@ -700,6 +826,18 @@ export class TldrawAgent {
 		}
 
 		return { promise: requestPromise, cancel }
+	}
+
+	/**
+	 * Tell the model about actions that were skipped or only partly applied during a request
+	 * (e.g. edits to user-locked shapes), as bounded data for its next request.
+	 */
+	private reportActionNotes(helpers: AgentHelpers) {
+		const { notes, omitted } = helpers.getActionNotes()
+		if (notes.length === 0) return
+		this.schedule({
+			data: [{ kind: 'canvas-action-notes', notes, omittedNotes: omitted }],
+		})
 	}
 
 	/**
@@ -723,6 +861,10 @@ export class TldrawAgent {
 			},
 			signal,
 		})
+
+		if (!res.ok) {
+			throw new Error(await describeFailedResponse(res))
+		}
 
 		if (!res.body) {
 			throw Error('No body in response')
@@ -761,7 +903,47 @@ export class TldrawAgent {
 				}
 			}
 		} finally {
+			// Stop the underlying stream too (not just the lock) when we exit early or fail
+			reader.cancel().catch(() => {})
 			reader.releaseLock()
 		}
 	}
+}
+
+/**
+ * Resolve the data of a request. A failed item becomes an error note instead of failing
+ * the whole follow-up.
+ */
+async function resolveRequestData(data: AgentRequest['data']): Promise<JsonValue[]> {
+	return Promise.all(
+		data.map(async (item) => {
+			try {
+				return await item
+			} catch (error) {
+				console.error('Error retrieving data:', error)
+				return 'An error occurred while retrieving some data.'
+			}
+		})
+	)
+}
+
+/**
+ * Build a descriptive error message for a non-2xx /stream response.
+ */
+async function describeFailedResponse(res: Response): Promise<string> {
+	let detail = ''
+	try {
+		const text = await res.text()
+		try {
+			const parsed = JSON.parse(text)
+			detail = typeof parsed?.error === 'string' ? parsed.error : text
+		} catch {
+			detail = text
+		}
+	} catch {
+		// Ignore unreadable bodies
+	}
+	detail = detail.trim().slice(0, 500)
+	const status = `${res.status}${res.statusText ? ` ${res.statusText}` : ''}`
+	return `Canvas AI request failed (${status})${detail ? `: ${detail}` : ''}`
 }

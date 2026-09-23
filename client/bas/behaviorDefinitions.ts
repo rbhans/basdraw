@@ -17,7 +17,7 @@ export function behaviorChannel(binding: Pick<ShapeBinding, 'runtimeProperty' | 
 	return behaviorDefinitions[binding.runtimeProperty].channel
 }
 
-export function behaviorConflict(candidate: ShapeBinding, bindings: ShapeBinding[]): string | null {
+export function behaviorConflict(candidate: ShapeBinding, bindings: readonly ShapeBinding[]): string | null {
 	if (candidate.enabled === false) return null
 	const channel = behaviorChannel(candidate)
 	if (!channel) return null
@@ -27,7 +27,7 @@ export function behaviorConflict(candidate: ShapeBinding, bindings: ShapeBinding
 
 // Loaded legacy conflicts resolve consistently: nearest owner is supplied first,
 // then the first enabled behavior owns the channel, even when its point is offline.
-export function resolveBehaviorChannels(bindings: ShapeBinding[]) {
+export function resolveBehaviorChannels(bindings: readonly ShapeBinding[]) {
 	const used = new Set<string>()
 	return bindings.filter((binding) => {
 		if (binding.enabled === false) return false

@@ -20,7 +20,18 @@ Enablement controls the active capability instead:
 - connection runtime
 - agent availability
 
-The Add-ons menu stores only explicit user overrides. A newly installed plugin can therefore use its own `defaultEnabled` value without migrating every user's preferences. Enabling a plugin also enables its declared dependencies. Core compatibility plugins can use `alwaysEnabled`.
+The Add-ons menu stores only explicit user overrides. A newly installed plugin can therefore use its own `defaultEnabled` value without migrating every user's preferences. Enabling a plugin also enables its declared dependencies. Core compatibility plugins can use `alwaysEnabled`. Preferences are saved outside the React state updater; if storage is full or blocked the choice still applies for the session.
+
+## Dependencies, contexts and isolation
+
+Every optional plugin must work, or degrade gracefully, with any other optional plugin disabled. Descriptor metadata lives in `client/plugins/pluginManifest.ts` (React-free), and `builtinPlugins.tsx` adds the UI contributions to those entries.
+
+- `dependencies` are required. Disabling one disables the dependents; enabling a plugin enables them.
+- `optionalDependencies` are enhancements the plugin must work without. For example Live behaviors uses baskStream's drag-to-bind when present; Vector PDF indexes the source PDF only when Document understanding is on.
+- `contexts.provides` / `contexts.requires` / `contexts.optional` name the React contexts a plugin mounts or reads. The host always provides `bas-workspace`, `bas-runtime`, `basdraw-plugins`, `access-policy`, `toasts` and `tldraw-editor` (`HOST_CONTEXTS` in `registry.ts`). A required plugin context must come from the plugin itself or a required dependency; the registry rejects anything else at startup. An optional context needs a hook that returns an inert fallback when its provider is absent, as `usePointDrag()` does.
+- Property sections, canvas overlays, shape decorators, app panels and toolbar items render inside `PluginBoundary`. A failing section shows a small tldraw-styled notice with Retry; a failing decorator falls back to the undecorated shape; a failing overlay, panel or toolbar item is hidden and logged. Editor-mount errors are logged per plugin.
+- `scripts/plugin-dependencies.test.mjs` resolves every enable/disable combination of the built-in plugins and checks dependency and context consistency.
+- Heavy UI that disabled or unused plugins should not pay for loads lazily: the Vector PDF dialog and the ECharts trend renderer are separate chunks. Shape utilities themselves stay registered so saved canvases always load.
 
 ## Contribution surfaces
 
@@ -55,7 +66,18 @@ The agent receives only the redacted adapter/tool descriptions. It calls the gen
 
 Plugin knowledge lives in a shared versioned bundle registered in `shared/knowledge/bundles.ts`. Client descriptors and the Worker use the same installation catalog. Bundles can declare their own connection types without imposing shared BAS operations. The Worker supplies metadata first, then scoped content on demand. Project entries remain independently editable. See [AI skills and project knowledge](knowledge-backend.md) for retrieval, persistence and extension details.
 
-The built-in baskStream adapter currently exposes bounded `browse`, `search`, and batch `read` tools. Another connection can expose a different tool set without pretending to support baskStream operations. Any adapter may declare a write tool, but the runtime only exposes it in Full control and pauses for an **Allow once** confirmation immediately before execution. The adapter's declared effect is checked again at execution time. Future high-impact tools can add richer preview and post-write verification without changing read tools or canvas capabilities.
+The built-in baskStream adapter exposes bounded discovery/reads and supported station-advertised point, alarm, tag and relation operations. Another connection can expose an entirely different tool set.
+
+Write tools are staged; adapters supply the protocol steps and the runtime (`client/connections/ConnectionRuntime.ts`, `runConnectionToolCall.ts`) owns the sequence:
+
+1. `prepare` (optional, read-only) validates input and reads current state for the approval card. It must not mutate.
+2. `riskFor` (optional) classifies the call so high-risk writes show a stronger warning; a throwing classifier counts as high risk.
+3. The user answers **Allow once**. The runtime issues a one-time approval token bound to the owner, agent turn, connection, tool, adapter `sessionId`, canonical arguments and an expiry.
+4. At execution the runtime consumes that token, reruns `prepare`, and rechecks access policy (writes need Full control), adapter session identity and cancellation after every await.
+5. It saves an audit record, then calls `dispatch`. Anything that fails before this point is reported as not sent.
+6. `verify` (optional) reads back the result; its errors never change the outcome. The result is stored on the audit record.
+
+Adapters own protocol validation, preconditions and readback, and normalize partial failures to a top-level `ok: false`. A dispatch whose outcome cannot be known (timeout or close after send) is recorded as `unknown`, never as success or failure. No automatic mutation retries are performed. baskStream also checks the session for each underlying request; a session mismatch rejects as not sent.
 
 ## Agent canvas capabilities
 
@@ -71,6 +93,8 @@ User-facing profiles are presets over three independent policy axes: `ai: off | 
 - **Canvas control**: AI may inspect and edit the canvas; no connection tools enter model context.
 - **Analysis**: AI may inspect the canvas and use read-only connection tools; the editor and canvas action runtime are read-only.
 - **View only**: the editor is read-only and Canvas AI is off. Existing live data can still display.
+
+A first run, or a stored profile id that is missing or unrecognized, uses **Canvas control** (`DEFAULT_ACCESS_PROFILE_ID` in `shared/access.ts`), never Full control.
 
 Action metadata declares its access class. Missing metadata fails closed as a canvas write. Changing profiles cancels an active agent request so an already-streaming action cannot retain the previous profile.
 
@@ -90,9 +114,9 @@ Action metadata declares its access class. Missing metadata fails closed as a ca
 1. Define the feature behind a `BasdrawPlugin` descriptor in `builtinPlugins.tsx` or a focused module imported there.
 2. Give the plugin only the contribution surfaces it owns. Do not edit `App.tsx`, `DataToolbar.tsx` or `DataShapeStylePanel.tsx` for normal feature registration.
 3. Add tldraw record migrations before changing any saved schema.
-4. Declare dependencies on other plugin IDs rather than importing their UI.
+4. Declare required and optional dependencies, and the contexts the plugin provides or consumes, in `pluginManifest.ts` rather than importing another plugin's UI. Consume another plugin's context only through a hook with a no-provider fallback, or declare that plugin as a required dependency.
 5. Add connection or agent declarations when the feature exposes data or model actions.
-6. Verify the feature enabled, disabled, and with an existing saved canvas that contains its records.
+6. Verify the feature enabled, disabled, with each other optional plugin disabled, and with an existing saved canvas that contains its records. Run `npm test` for the dependency matrix.
 
 ## Current and planned extension points
 

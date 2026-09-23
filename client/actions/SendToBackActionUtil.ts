@@ -16,7 +16,7 @@ export const SendToBackActionUtil = registerActionUtil(
 		}
 
 		override sanitizeAction(action: Streaming<SendToBackAction>, helpers: AgentHelpers) {
-			action.shapeIds = helpers.ensureShapeIdsExist(action.shapeIds ?? [])
+			action.shapeIds = helpers.ensureShapeIdsAreEditable(action.shapeIds ?? [])
 			return action
 		}
 

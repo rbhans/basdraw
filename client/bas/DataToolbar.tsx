@@ -5,6 +5,7 @@ import {
 } from 'tldraw'
 import { pluginRegistry } from '../plugins/builtinPlugins'
 import { useBasdrawPlugins } from '../plugins/PluginContext'
+import { PluginBoundary } from '../plugins/PluginBoundary'
 import type { BasdrawToolbarItem } from '../plugins/types'
 
 export function DataToolbar() {
@@ -23,7 +24,7 @@ export function DataToolbar() {
 					</TldrawUiDropdownMenuTrigger>
 					<TldrawUiDropdownMenuContent side="top" align="end" alignOffset={0}>
 						<TldrawUiMenuContextProvider type="menu" sourceId="toolbar">
-							{items.map((item) => <PluginMenuItem key={item.id} item={item} />)}
+							{items.map((item) => <PluginBoundary key={item.id} label={item.id} contribution={item.id} fallback="silent"><PluginMenuItem item={item} /></PluginBoundary>)}
 						</TldrawUiMenuContextProvider>
 					</TldrawUiDropdownMenuContent>
 				</TldrawUiDropdownMenuRoot>

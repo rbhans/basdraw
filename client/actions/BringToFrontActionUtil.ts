@@ -16,7 +16,7 @@ export const BringToFrontActionUtil = registerActionUtil(
 		}
 
 		override sanitizeAction(action: Streaming<BringToFrontAction>, helpers: AgentHelpers) {
-			action.shapeIds = helpers.ensureShapeIdsExist(action.shapeIds ?? [])
+			action.shapeIds = helpers.ensureShapeIdsAreEditable(action.shapeIds ?? [])
 			return action
 		}
 

@@ -19,7 +19,7 @@ export const MoveActionUtil = registerActionUtil(
 			if (!action.complete) return action
 
 			// Make sure the shape ID refers to a real shape
-			const shapeId = helpers.ensureShapeIdExists(action.shapeId)
+			const shapeId = helpers.ensureShapeIdIsEditable(action.shapeId)
 			if (!shapeId) return null
 			action.shapeId = shapeId
 

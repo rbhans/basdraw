@@ -27,6 +27,8 @@ Skills should stay under 12,000 characters, with longer supporting material stor
 
 Knowledge is context, not authorization. Current tool descriptions determine available operations. Project text cannot enable tools, override the user's request or bypass existing station write restrictions.
 
+Stored titles, descriptions and bodies are untrusted. Before they enter a prompt, bracketed block markers (`[BASDRAW …]`, `[/BASDRAW …]`, `[EXPLICITLY LOADED KNOWLEDGE]`, and role headers such as `[SYSTEM]` or `[USER]` used by the Codex input) are rewritten to parentheses, so an entry cannot close or forge a block. Catalog metadata and loaded pages are wrapped in a labelled `[BASDRAW UNTRUSTED REFERENCE DATA: …]` block stating that the contents are data, not instructions.
+
 The catalog is automatically scoped to enabled plugins and supplied to every configured model provider. Skill bodies are not blindly appended to every turn: the agent receives their metadata, loads a relevant skill with the generic knowledge action, and retains the bounded loaded page across dependent follow-up actions. This keeps future plugin additions discoverable without permanently filling the context window.
 
 ## Project UI and persistence
@@ -35,7 +37,7 @@ Open **Add-ons → AI & references → Project knowledge** to create/edit notes,
 
 `document.meta.basdrawProjectId` associates the canvas with its knowledge and travels with the normal tldraw document. Existing canvases adopt `bas-whiteboard-canvas-v1` on upgrade to preserve prior knowledge. Subsequently opened documents without an identity receive a new one; documents carrying an identity retain it. Advanced **Project identity** settings associate canvases with shared or separate projects without moving or deleting entries.
 
-The existing browser persistence key is unchanged. Canvas saves contain the identity, not the external knowledge entries. Back up `.wrangler/` separately for local knowledge. Automatic PDF text extraction, document relationship indexing and knowledge export inside canvas files are not implemented here. Project content currently enters through text editing or the API.
+The existing browser persistence key is unchanged. Canvas saves contain the identity, not the external knowledge entries. Back up `.wrangler/` separately for local knowledge. Project content enters through text editing, the API, or document indexing (see `docs/document-understanding.md`): documents imported in the current session are extracted and indexed automatically; documents that arrive inside an opened or pasted file are indexed only after the user confirms, and are re-extracted from their original bytes first. Document relationship indexing and knowledge export inside canvas files are not implemented.
 
 ## Connection scope
 
@@ -49,15 +51,25 @@ Run `npm run knowledge:migrate`, then `npm run dev`. Wrangler stores local SQLit
 
 Available endpoints:
 
-- `GET /api/knowledge`: administrative list with kind, scopeType, scopeId and enabled filters.
+- `GET /api/knowledge`: administrative metadata list (no bodies; each row has `contentLength`) with kind, scopeType, scopeId and enabled filters. Pages hold up to `limit` rows (default 50, max 100); pass the returned `nextCursor` as `cursor` for the next page.
 - `GET /api/knowledge/context`: preview metadata catalog; accepts projectId, pluginIds, connectionIds and connectionTypes.
 - `GET /api/knowledge/:id`: administrative full entry.
 - `POST /api/knowledge/retrieve`: scoped agent retrieval, accepting `{ scope, request }`.
 - `POST /api/knowledge`, `PATCH /api/knowledge/:id`, `DELETE /api/knowledge/:id`: administration.
 
-Retrieval scope includes projectId, connectionId (legacy), connectionIds, connectionTypes and enabled pluginIds. The app supplies it independently of model arguments.
+Retrieval scope includes projectId, connectionId (legacy), connectionIds, connectionTypes and enabled pluginIds (up to 100 ids per list). The app supplies it independently of model arguments. Id lists are bound as a single JSON parameter (`json_each`), keeping every statement well under D1's 100-parameter limit.
 
-This remains a local single-user app. Scope filtering is not a multi-user authorization system; hosted ownership/access would need authenticated server-side scope resolution. Local endpoints accept same-origin requests or command-line requests without a token. Existing remote policy requires KNOWLEDGE_ADMIN_TOKEN; the UI does not implement remote login. No remote database or deployment is created.
+## Request trust
+
+This remains a local single-user app. Scope filtering is not a multi-user authorization system; hosted ownership/access would need authenticated server-side scope resolution.
+
+`/stream`, `/agent/*`, `/api/knowledge*` and `/api/connection-audit*` share one check (`worker/requestTrust.ts`). There is no CORS policy.
+
+- Loopback host (`127.0.0.1`, `localhost`, `[::1]`; the Vite dev server serves the app and Worker same-origin): browser requests must be same-origin. A request whose `Origin` differs from the Worker origin, or whose `Sec-Fetch-Site` is anything other than `same-origin`/`none`, is rejected with 403. Command-line tools that send neither header are accepted, since a local process can already reach loopback services.
+- Any other host, including a DNS-rebinding name that resolves to loopback: requires `Authorization: Bearer <BASDRAW_API_TOKEN>` (`KNOWLEDGE_ADMIN_TOKEN` is accepted as the legacy name). Without a configured token those routes return 503. The UI does not implement remote login.
+- POST/PATCH bodies must be `Content-Type: application/json` (415 otherwise), so cross-site "simple" requests cannot reach a JSON handler.
+
+No remote database or deployment is created.
 
 ## Adding a plugin skill
 
@@ -65,7 +77,7 @@ Create a typed PluginKnowledgeBundle with a pluginId, version, optional connecti
 
 ## Verification
 
-`npm test` covers database isolation, direct reads, search, pagination, bundle ownership, legacy seeds, outages and context lifecycle. Build/typecheck cover integration.
+`scripts/worker-routes.test.mjs` covers the request-trust policy, audit route validation, prompt-marker neutralization, list pagination and compact document chunks. `npm test` also covers database isolation, direct reads, search, pagination, bundle ownership, legacy seeds, outages and context lifecycle. Build/typecheck cover integration.
 
 The optional `scripts/knowledge-live-smoke.mjs` uses the existing subscription connection with synthetic text. Set BASDRAW_SMOKE_PROJECT to a project containing a temporary verification reference with label QA-AHU-42. It sends no drawing, credentials or station data and executes only knowledge reads. It is excluded from default tests.
 

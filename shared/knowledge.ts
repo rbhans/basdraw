@@ -27,6 +27,9 @@ export type KnowledgeEntry = {
 	updatedAt: number
 }
 
+/** Administrative list row: metadata plus body length, without the body. */
+export type KnowledgeEntrySummary = Omit<KnowledgeEntry, 'content'> & { contentLength: number }
+
 /** Portable plugin instructions. Tools and credentials stay in the adapter. */
 export type PluginKnowledgeBundle = {
 	pluginId: string

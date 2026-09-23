@@ -152,8 +152,31 @@ function App() {
 			setDataWidgetCount(shapes.filter((shape) => shape.type === BAS_TABLE_SHAPE_TYPE || shape.type === BAS_TREND_SHAPE_TYPE).length)
 		}
 		updateSelection()
-		return editor.store.listen(updateSelection, { scope: 'all' })
+		// Document changes only: pointer moves, selection and camera are session scope.
+		const stopDocument = editor.store.listen(updateSelection, { scope: 'document' })
+		// The current page lives in session state, so page switches are observed separately.
+		const stopPage = editor.sideEffects.registerAfterChangeHandler('instance', (previous, next) => {
+			if (previous.currentPageId !== next.currentPageId) updateSelection()
+		})
+		return () => { stopDocument(); stopPage() }
 	}, [editor, workspace.connectedProfile?.alias])
+
+	// Built once per document/connection change. Live values travel through the snapshot
+	// store, so a COV push re-renders only the shapes and widgets reading that point.
+	const liveBindings = liveEffects && workspace.status === 'connected'
+	const connectedAlias = workspace.connectedProfile?.alias
+	const runtimeDocument = useMemo(() => ({
+		...workspace.document,
+		bindings: liveBindings ? workspace.document.bindings.filter((binding) => binding.enabled !== false && binding.stationAlias === connectedAlias) : [],
+	}), [connectedAlias, liveBindings, workspace.document])
+	const runtime = useMemo(() => ({
+		document: runtimeDocument,
+		connected: workspace.status === 'connected',
+		stationAlias: connectedAlias || null,
+		historySeries: workspace.historySeries,
+		loadHistory: workspace.loadHistory,
+		snapshotStore: workspace.snapshotStore,
+	}), [connectedAlias, runtimeDocument, workspace.historySeries, workspace.loadHistory, workspace.snapshotStore, workspace.status])
 
 	// Custom components that need the agent app's React context
 	const components: TLComponents = useMemo(() => {
@@ -180,14 +203,7 @@ function App() {
 		<TldrawUiToastsProvider>
 			<BasWorkspaceProvider workspace={workspace}>
 				<PluginProviders>
-					<BasRuntimeProvider value={{
-						document: { ...workspace.document, bindings: liveEffects && workspace.status === 'connected' ? workspace.document.bindings.filter((binding) => binding.enabled !== false && binding.stationAlias === workspace.connectedProfile?.alias) : [] },
-						connected: workspace.status === 'connected',
-						stationAlias: workspace.connectedProfile?.alias || null,
-						historySeries: workspace.historySeries,
-						loadHistory: workspace.loadHistory,
-						snapshots: workspace.snapshots,
-					}}>
+					<BasRuntimeProvider value={runtime}>
 						<div className={`bas-app-shell tl-theme__${colorMode} ${showAi ? 'ai-open' : ''}`}>
 							<main className="canvas-workspace">
 								<header className="canvas-header">

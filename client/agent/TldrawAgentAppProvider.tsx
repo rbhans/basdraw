@@ -3,6 +3,7 @@ import { useEditor, useToasts, useValue } from 'tldraw'
 import { TldrawAgent } from './TldrawAgent'
 import { TldrawAgentApp } from './TldrawAgentApp'
 import type { BasdrawAccessPolicy } from '../../shared/access'
+import { BASDRAW_AGENT_EXTENSIONS } from './basAgentExtensions'
 
 const TldrawAgentAppContext = createContext<TldrawAgentApp | null>(null)
 
@@ -79,7 +80,11 @@ export const TldrawAgentAppProvider = memo(function TldrawAgentAppProvider({
 
 	// Create the TldrawAgentApp instance
 	useEffect(() => {
-		const instance = new TldrawAgentApp(editor, { onError: handleError, accessPolicy })
+		const instance = new TldrawAgentApp(editor, {
+			onError: handleError,
+			accessPolicy,
+			extensions: BASDRAW_AGENT_EXTENSIONS,
+		})
 
 		// Load persisted state first (this will create agents from persisted data)
 		instance.persistence.loadState()

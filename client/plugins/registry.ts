@@ -9,14 +9,41 @@ import type {
 	BasdrawToolbarItem,
 } from './types'
 
+/** Contexts mounted by the application shell regardless of which plugins are enabled. */
+export const HOST_CONTEXTS = ['tldraw-editor', 'basdraw-plugins', 'access-policy', 'bas-workspace', 'bas-runtime', 'toasts'] as const
+
 export class BasdrawPluginRegistry {
 	readonly plugins: readonly BasdrawPlugin[]
 	private readonly byId: ReadonlyMap<string, BasdrawPlugin>
+	private readonly hostContexts: ReadonlySet<string>
 
-	constructor(plugins: readonly BasdrawPlugin[]) {
+	constructor(plugins: readonly BasdrawPlugin[], options: { hostContexts?: readonly string[] } = {}) {
 		this.plugins = [...plugins]
 		this.byId = new Map(plugins.map((plugin) => [plugin.id, plugin]))
+		this.hostContexts = new Set(options.hostContexts ?? HOST_CONTEXTS)
 		this.validate()
+	}
+
+	/** Required contexts that neither the host nor an enabled plugin provides. Empty when consistent. */
+	missingContexts(enabled: readonly BasdrawPlugin[]) {
+		const provided = new Set([...this.hostContexts, ...enabled.flatMap((plugin) => plugin.contexts?.provides ?? [])])
+		return enabled.flatMap((plugin) => (plugin.contexts?.requires ?? [])
+			.filter((context) => !provided.has(context))
+			.map((context) => ({ plugin: plugin.id, context })))
+	}
+
+	/** Transitive required dependencies of a plugin, excluding itself. */
+	dependencyClosure(id: string): Set<string> {
+		const result = new Set<string>()
+		const visit = (current: string) => {
+			for (const dependency of this.byId.get(current)?.dependencies ?? []) {
+				if (result.has(dependency)) continue
+				result.add(dependency)
+				visit(dependency)
+			}
+		}
+		visit(id)
+		return result
 	}
 
 	get(id: string) { return this.byId.get(id) }
@@ -76,8 +103,8 @@ export class BasdrawPluginRegistry {
 			.sort((a, b) => a.group.order - b.group.order)
 	}
 
-	propertySections(plugins: readonly BasdrawPlugin[]): BasdrawPropertySection[] {
-		return plugins.flatMap((plugin) => plugin.propertySections ?? []).sort((a, b) => a.order - b.order)
+	propertySections(plugins: readonly BasdrawPlugin[]): (BasdrawPropertySection & { pluginLabel: string })[] {
+		return plugins.flatMap((plugin) => (plugin.propertySections ?? []).map((section) => ({ ...section, pluginLabel: plugin.label }))).sort((a, b) => a.order - b.order)
 	}
 
 	documentRequirements(plugins: readonly BasdrawPlugin[]): BasdrawDocumentPluginRequirement[] {
@@ -103,8 +130,13 @@ export class BasdrawPluginRegistry {
 			for (const dependency of plugin.dependencies ?? []) {
 				if (!this.byId.has(dependency)) throw new Error(`Plugin ${plugin.id} requires missing plugin ${dependency}.`)
 			}
+			for (const dependency of plugin.optionalDependencies ?? []) {
+				if (!this.byId.has(dependency)) throw new Error(`Plugin ${plugin.id} optionally uses missing plugin ${dependency}.`)
+				if (plugin.dependencies?.includes(dependency)) throw new Error(`Plugin ${plugin.id} lists ${dependency} as both required and optional.`)
+			}
 		}
 		this.assertNoDependencyCycles()
+		this.assertContextsSatisfied()
 		this.assertUniqueIds('knowledge entry', this.plugins.flatMap((plugin) => plugin.knowledge?.entries.map((entry) => entry.id) ?? []))
 		this.assertUniqueIds('toolbar item', this.plugins.flatMap((plugin) => plugin.toolbarItems?.map((item) => item.id) ?? []))
 		this.assertUniqueIds('UI tool', this.plugins.flatMap((plugin) => plugin.tldraw?.uiTools?.map((tool) => tool.id) ?? []))
@@ -125,6 +157,25 @@ export class BasdrawPluginRegistry {
 		this.bindingUtils()
 		this.tools()
 		this.overlayUtils()
+	}
+
+	// A required context must come from the host, the plugin itself or a required dependency,
+	// so it can never be missing while the plugin is enabled. Optional contexts must exist somewhere.
+	private assertContextsSatisfied() {
+		const providers = new Map<string, string[]>()
+		for (const plugin of this.plugins) for (const context of plugin.contexts?.provides ?? []) providers.set(context, [...(providers.get(context) ?? []), plugin.id])
+		for (const plugin of this.plugins) {
+			const available = new Set([plugin.id, ...this.dependencyClosure(plugin.id)])
+			for (const context of plugin.contexts?.requires ?? []) {
+				if (this.hostContexts.has(context)) continue
+				if (!(providers.get(context) ?? []).some((provider) => available.has(provider))) {
+					throw new Error(`Plugin ${plugin.id} requires context ${context}; declare a dependency on its provider or make it optional.`)
+				}
+			}
+			for (const context of plugin.contexts?.optional ?? []) {
+				if (!this.hostContexts.has(context) && !providers.has(context)) throw new Error(`Plugin ${plugin.id} uses unknown optional context ${context}.`)
+			}
+		}
 	}
 
 	private assertNoDependencyCycles() {

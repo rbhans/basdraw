@@ -1,13 +1,13 @@
 import type { Editor, TLShape } from 'tldraw'
 import { useRef, type ReactNode } from 'react'
 import { useRuntimeValues } from './runtimeAnimationHooks'
-import { bindingsForRenderedShape } from './bindingScope'
+import { bindingsForRenderedShape, type BindingIndex } from './bindingScope'
 import { getRuntimeShapePresentation } from './runtimeMapping'
 import { SynchronizedHtmlMotion } from './RuntimeMotion'
 import { formatSnapshot, labelColorStyle, labelFontStyle, labelPositionStyle, labelStatusTextColor, snapshotState } from './labelPresentation'
 import type { LabelPlacement, PointSnapshot, ShapeBinding } from './types'
 
-export function labelStacks(bindings: ShapeBinding[]) {
+export function labelStacks(bindings: readonly ShapeBinding[]) {
 	const stacks = new Map<string, { shapeId: string; placement: LabelPlacement; labels: ShapeBinding[] }>()
 	for (const binding of bindings) {
 		if (binding.enabled === false || binding.runtimeProperty !== 'label') continue
@@ -19,8 +19,8 @@ export function labelStacks(bindings: ShapeBinding[]) {
 	return stacks
 }
 
-export function RuntimeValueLabels({ editor, shapes, bindings, snapshots, zoom }: {
-	editor: Editor; shapes: TLShape[]; bindings: ShapeBinding[]; snapshots: Record<string, PointSnapshot>; zoom: number
+export function RuntimeValueLabels({ editor, shapes, bindings, bindingsByShape, snapshots, zoom }: {
+	editor: Editor; shapes: TLShape[]; bindings: readonly ShapeBinding[]; bindingsByShape?: BindingIndex; snapshots: Readonly<Record<string, PointSnapshot>>; zoom: number
 }) {
 	const byId = new Map<string, TLShape>(shapes.map((shape) => [shape.id, shape]))
 	return <>{[...labelStacks(bindings)].map(([key, stack]) => {
@@ -28,14 +28,14 @@ export function RuntimeValueLabels({ editor, shapes, bindings, snapshots, zoom }
 		if (!shape) return null
 		const bounds = editor.getShapePageBounds(shape)
 		if (!bounds) return null
-		const presentation = getRuntimeShapePresentation(bindingsForRenderedShape(editor, shape, bindings), snapshots)
+		const presentation = getRuntimeShapePresentation(bindingsForRenderedShape(editor, shape, bindingsByShape ?? bindings), snapshots)
 		if (presentation.visible === false) return null
 		const topLeft = editor.pageToViewport(bounds)
 		const style = labelPositionStyle(topLeft.x, topLeft.y, bounds.w * zoom, bounds.h * zoom, stack.placement, 0, 1)
 		const visible = stack.labels.filter((binding) => snapshots[binding.pointReference])
 		return <div key={key} className="runtime-label-anchor" style={style}>
 			<LabelTranslation x={presentation.translation?.x ?? 0} y={presentation.translation?.y ?? 0} opacity={presentation.opacity ?? 1} zoom={zoom}>
-			<SynchronizedHtmlMotion motion={presentation.motion} motions={presentation.motions?.map((motion) => ({ ...motion, x: motion.x * zoom, y: motion.y * zoom }))}>
+			<SynchronizedHtmlMotion motions={presentation.motions?.map((motion) => ({ ...motion, x: motion.x * zoom, y: motion.y * zoom }))}>
 				<div className="runtime-label-stack" style={{ display: 'flex', flexDirection: stack.placement === 'top' ? 'column-reverse' : 'column', alignItems: stack.placement === 'left' ? 'flex-end' : stack.placement === 'right' ? 'flex-start' : 'center' }}>
 					{visible.map((binding, index) => {
 						const snapshot = snapshots[binding.pointReference]

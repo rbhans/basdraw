@@ -2,6 +2,7 @@ import { structuredClone } from 'tldraw'
 import { ChatHistoryPart } from '../../shared/schema/PromptPartDefinitions'
 import { AgentRequest } from '../../shared/types/AgentRequest'
 import { AgentHelpers } from '../AgentHelpers'
+import { boundChatHistoryForPrompt } from './chatHistoryBounds'
 import { PromptPartUtil, registerPromptPartUtil } from './PromptPartUtil'
 
 export const ChatHistoryPartUtil = registerPromptPartUtil(
@@ -9,7 +10,8 @@ export const ChatHistoryPartUtil = registerPromptPartUtil(
 		static override type = 'chatHistory' as const
 
 		override async getPart(_request: AgentRequest, helpers: AgentHelpers) {
-			const history = structuredClone(this.agent.chat.getHistory())
+			// Bound the history first (drops diffs, shortens old retrieved data) so we only clone what we send
+			const history = structuredClone(boundChatHistoryForPrompt(this.agent.chat.getHistory()))
 
 			for (const historyItem of history) {
 				if (historyItem.type !== 'prompt') continue

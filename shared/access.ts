@@ -39,8 +39,16 @@ export const BASDRAW_ACCESS_PROFILES: readonly {
 	},
 ] as const
 
+/**
+ * Used when no valid profile is stored (first run, corrupted or renamed id).
+ * Canvas control keeps the AI useful for drawing but shares no BAS connection
+ * tools, so a bad stored value can never silently enable station writes.
+ */
+export const DEFAULT_ACCESS_PROFILE_ID: BasdrawAccessProfileId = 'canvas-control'
+
 export function getAccessProfile(id: string | null | undefined) {
-	return BASDRAW_ACCESS_PROFILES.find((profile) => profile.id === id) ?? BASDRAW_ACCESS_PROFILES[0]
+	return BASDRAW_ACCESS_PROFILES.find((profile) => profile.id === id)
+		?? BASDRAW_ACCESS_PROFILES.find((profile) => profile.id === DEFAULT_ACCESS_PROFILE_ID)!
 }
 
 export type AgentActionAccess = 'analysis' | 'canvas-write' | 'connection'

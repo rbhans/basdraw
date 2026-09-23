@@ -1,5 +1,6 @@
-import { useEffect, useState, type KeyboardEvent } from 'react'
-import { formatSnapshot } from './RuntimeBindingsOverlay'
+import { useEffect, useRef, useState, type KeyboardEvent } from 'react'
+import { TldrawUiButton, TldrawUiButtonLabel } from 'tldraw'
+import { formatSnapshot } from './labelPresentation'
 import { PointTypeBadge } from './PointTypeBadge'
 import { ContainerIcon } from './ContainerIcon'
 import {
@@ -11,6 +12,7 @@ import {
 import type { BasWorkspace } from './useBasWorkspace'
 import { pointReference } from './dataShapeSetup'
 import { usePointDrag } from './PointDrag'
+import { usePointSnapshot } from './usePointSnapshots'
 
 export function NiagaraPanel({ workspace }: { workspace: BasWorkspace }) {
 	const [collapsed, setCollapsed] = useState(false)
@@ -23,7 +25,7 @@ export function NiagaraPanel({ workspace }: { workspace: BasWorkspace }) {
 }
 
 function ConnectionForm({ workspace }: { workspace: BasWorkspace }) {
-	const firstProfile = workspace.profiles.find((profile) => profile.alias === workspace.document.stationAlias) || workspace.profiles[0]
+	const firstProfile = workspace.reconnectProfile || workspace.profiles.find((profile) => profile.alias === workspace.document.stationAlias) || workspace.profiles[0]
 	const [form, setForm] = useState<ConnectionInput>(() => ({
 		alias: firstProfile?.alias || workspace.document.stationAlias || 'local-station',
 		name: firstProfile?.name || 'Local Niagara station',
@@ -34,6 +36,9 @@ function ConnectionForm({ workspace }: { workspace: BasWorkspace }) {
 		remember: true,
 	}))
 	const [testResult, setTestResult] = useState<string | null>(null)
+	const [testError, setTestError] = useState<string | null>(null)
+	const [testing, setTesting] = useState(false)
+	const passwordInput = useRef<HTMLInputElement>(null)
 
 	const setField = <K extends keyof ConnectionInput>(key: K, value: ConnectionInput[K]) => {
 		setForm((current) => ({ ...current, [key]: value }))
@@ -44,18 +49,41 @@ function ConnectionForm({ workspace }: { workspace: BasWorkspace }) {
 		if (!profile) return
 		setForm((current) => ({ ...profile, password: current.password, remember: true }))
 		setTestResult(null)
+		setTestError(null)
 	}
 
-	const submit = async (testOnly = false) => {
+	// The password is never stored, so Reconnect reopens the form from the last profile.
+	const reconnect = () => {
+		const profile = workspace.reconnectProfile
+		if (!profile) return
+		setForm((current) => ({ ...profile, password: current.password, remember: current.remember }))
 		setTestResult(null)
+		setTestError(null)
+		passwordInput.current?.focus()
+	}
+
+	const submit = async () => {
+		setTestResult(null)
+		setTestError(null)
 		try {
-			const capabilities = await workspace.connect(form)
-			if (testOnly) {
-				setTestResult(`Connection passed · API ${capabilities.apiVersion || 'not reported'}`)
-				workspace.disconnect()
-			}
+			await workspace.connect(form)
 		} catch {
 			// The workspace exposes the bounded error message.
+		}
+	}
+
+	// Test only: a separate socket, no saved profile and no station alias written to the canvas.
+	const test = async () => {
+		setTestResult(null)
+		setTestError(null)
+		setTesting(true)
+		try {
+			const capabilities = await workspace.testConnection(form)
+			setTestResult(`Connection passed · API ${capabilities.apiVersion || 'not reported'}`)
+		} catch (cause) {
+			setTestError(cause instanceof Error ? cause.message : String(cause))
+		} finally {
+			setTesting(false)
 		}
 	}
 
@@ -104,7 +132,7 @@ function ConnectionForm({ workspace }: { workspace: BasWorkspace }) {
 				</label>
 				<label>
 					<span>Password</span>
-					<input type="password" value={form.password} onChange={(event) => setField('password', event.target.value)} autoComplete="current-password" required />
+					<input ref={passwordInput} type="password" value={form.password} onChange={(event) => setField('password', event.target.value)} autoComplete="current-password" required />
 				</label>
 				<label className="check-row">
 					<input type="checkbox" checked={form.tlsMode === 'insecure'} onChange={(event) => setField('tlsMode', event.target.checked ? 'insecure' : 'strict')} />
@@ -114,11 +142,15 @@ function ConnectionForm({ workspace }: { workspace: BasWorkspace }) {
 					<input type="checkbox" checked={form.remember} onChange={(event) => setField('remember', event.target.checked)} />
 					<span>Remember endpoint and user, never password</span>
 				</label>
-				{form.tlsMode === 'insecure' && <div className="inline-warning">TLS verification is disabled only for this station connection.</div>}
-				{workspace.error && <div className="inline-error">{workspace.error}</div>}
+				{form.tlsMode === 'insecure' && <div className="inline-warning" role="note">Certificate checks are off for this station. Anyone on the network path could intercept or change the traffic, including your password. Use only on a trusted network.</div>}
+				{workspace.error && <div className="inline-error" role="alert">
+					<span>{workspace.error}</span>
+					{workspace.reconnectProfile && <TldrawUiButton type="normal" className="niagara-reconnect" onClick={reconnect}><TldrawUiButtonLabel>Reconnect to {workspace.reconnectProfile.name}</TldrawUiButtonLabel></TldrawUiButton>}
+				</div>}
+				{testError && <div className="inline-error" role="alert">Test failed: {testError}</div>}
 				{testResult && <div className="inline-success">{testResult}</div>}
 				<div className="button-row">
-					<button className="secondary-button" type="button" disabled={workspace.status === 'connecting'} onClick={() => void submit(true)}>Test connection</button>
+					<button className="secondary-button" type="button" disabled={workspace.status === 'connecting' || testing} onClick={() => void test()}>{testing ? 'Testing…' : 'Test connection'}</button>
 					<button className="primary-button" type="submit" disabled={workspace.status === 'connecting'}>{workspace.status === 'connecting' ? 'Connecting…' : 'Connect'}</button>
 				</div>
 			</form>
@@ -205,7 +237,7 @@ function ConnectedPanel({ workspace }: { workspace: BasWorkspace }) {
 
 	const bindingPoint = workspace.selectedPoint
 	const selectedPointRef = bindingPoint?.slotPath || bindingPoint?.ord
-	const selectedSnapshot = selectedPointRef ? workspace.snapshots[selectedPointRef] : undefined
+	const selectedSnapshot = usePointSnapshot(workspace.snapshotStore, selectedPointRef)
 	const searchActive = query.trim().length > 0
 	const visibleSearchResults = searchResults?.filter((node) => nodeMatchesQuery(node, query)) || []
 	const selectedWidgetOrds = new Set<string>()
@@ -223,6 +255,8 @@ function ConnectedPanel({ workspace }: { workspace: BasWorkspace }) {
 				<span>baskStream {workspace.capabilities?.apiVersion || 'unknown'}</span>
 				<span>{workspace.activePoints.length} live {workspace.activePoints.length === 1 ? 'point' : 'points'}</span>
 			</div>
+			{workspace.subscriptionHealth === 'stale' && <div className="inline-warning" role="status">Live values may be out of date · retrying{workspace.subscriptionError ? ` (${workspace.subscriptionError})` : ''}</div>}
+			{workspace.notice && <div className="inline-warning" role="status">{workspace.notice}</div>}
 			{workspace.error && <div className="inline-error" role="status">{workspace.error}</div>}
 
 			<div className="tree-toolbar">

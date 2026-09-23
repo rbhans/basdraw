@@ -2,7 +2,7 @@
 
 Basdraw uses the tldraw Agent Starter Kit architecture already present in `client/`, `shared` and `worker`. The canvas agent can inspect structured shapes and the visible canvas, stream typed actions, modify the drawing and receive enabled project and connection knowledge selected by the Worker.
 
-The agent can also call tools published by an enabled, connected data adapter. The first adapter is Niagara via baskStream, with bounded station browse, point search, and current-value reads. Tool results return in a follow-up agent turn, so the same request can discover station data and then create or revise canvas content from that result.
+The agent can also call tools published by an enabled, connected data adapter. The first adapter is Niagara via baskStream, with bounded station browse, point search and current-value reads, plus changes to existing points, tags, relations and alarms when the user enables connection writes. Every write shows the exact change, needs the user's one-time approval and is recorded in the `connection_audit` table with its outcome (`succeeded`, `failed`, `unknown` or `cancelled`). Tool results return in a follow-up agent turn, so the same request can discover station data and then create or revise canvas content from that result.
 
 This is a protocol-neutral boundary. Each future connection adapter may publish a different set of tools and input contracts; the agent does not assume every connection behaves like baskStream. Only redacted tool metadata and the requested result enter model context. Connection credentials and authenticated clients remain in the local connection runtime.
 
@@ -19,7 +19,9 @@ Run `codex login` once, then use `npm run dev`. The development launcher starts 
 - creates ephemeral threads in an empty temporary working directory
 - uses a read-only sandbox and an approval policy of `never`
 - disables shell, web search, apps, plugins, MCP servers and multi-agent tools for the embedded process
-- listens only on `127.0.0.1:8791` and requires the private basdraw request header
+- listens only on `127.0.0.1:8791` and requires the private basdraw request header (a basic guard against casual cross-site requests, not an authentication boundary)
+
+The browser never talks to the bridge directly. The app calls the Worker's `/stream` and `/agent/*` routes, which accept only same-origin requests on a loopback host (or a bearer token elsewhere) and only JSON bodies; there is no CORS policy. Another website open in the same browser therefore cannot drive the subscription or read streamed output. See "Request trust" in `docs/knowledge-backend.md`. Closing the tab or pressing Stop aborts the Worker request, the model call and the bridge request; the bridge request also times out if it does not start within 60 seconds or goes silent for 3 minutes.
 
 ChatGPT authentication tokens remain managed by Codex. They are never returned by the bridge or stored in the browser, tldraw document, knowledge database or Niagara connection profile.
 

@@ -22,7 +22,13 @@ function shapeKind(shape: TLShape) {
 
 function titleCase(value: string) { return value.replace(/[-_]/g, ' ').replace(/\b\w/g, (letter) => letter.toUpperCase()) }
 
-function nextName(base: string, used: Set<string>) {
+function countNames(names: string[]) {
+	const counts = new Map<string, number>()
+	for (const name of names) counts.set(name, (counts.get(name) ?? 0) + 1)
+	return counts
+}
+
+function nextName(base: string, used: { has(name: string): boolean }) {
 	let index = 1
 	while (used.has(`${base} ${index}`.toLowerCase())) index++
 	return `${base} ${index}`
@@ -39,13 +45,37 @@ export function installShapeIdentities(editor: Editor) {
 			editor.updateShape({ id: shape.id, type: shape.type, meta: { ...shape.meta, basName: name } })
 		}
 	}, { history: 'ignore', ignoreShapeLock: true })
-	return editor.sideEffects.registerBeforeCreateHandler('shape', (shape, source) => {
-		const names = new Set(allNamedShapes(editor).map((item) => shapeName(item).toLowerCase()))
+	// Name counts are built once and kept current by side effects while a batch (paste,
+	// PDF import of thousands of pieces, moving shapes between pages) runs, instead of
+	// rescanning every shape per created shape. The cache is also dropped once the store settles.
+	let names: Map<string, number> | null = null
+	const add = (name: string) => names?.set(name, (names.get(name) ?? 0) + 1)
+	const remove = (name: string) => {
+		const count = names?.get(name) ?? 0
+		if (count <= 1) names?.delete(name)
+		else names?.set(name, count - 1)
+	}
+	const key = (shape: TLShape) => shapeName(shape).toLowerCase()
+	const stopInvalidate = editor.store.listen(() => { names = null }, { scope: 'document' })
+	const stopCreate = editor.sideEffects.registerBeforeCreateHandler('shape', (shape, source) => {
+		names ??= countNames(allNamedShapes(editor).map(key))
 		const existing = typeof shape.meta.basName === 'string' ? shape.meta.basName.trim() : ''
-		if (existing && (source !== 'user' || !names.has(existing.toLowerCase()))) return shape
+		// Reserve the name now: after-create handlers run only once the whole batch is stored.
+		if (existing && (source !== 'user' || !names.has(existing.toLowerCase()))) {
+			add(key(shape))
+			return shape
+		}
 		const name = nextName(existing ? `${existing} copy` : shapeKind(shape), names)
+		add(name.toLowerCase())
 		return { ...shape, meta: { ...shape.meta, basName: name } }
 	})
+	const stopDeleted = editor.sideEffects.registerAfterDeleteHandler('shape', (shape) => { remove(key(shape)) })
+	const stopRename = editor.sideEffects.registerAfterChangeHandler('shape', (previous, next) => {
+		if (previous.meta.basName === next.meta.basName && previous.type === next.type) return
+		remove(key(previous))
+		add(key(next))
+	})
+	return () => { stopCreate(); stopDeleted(); stopRename(); stopInvalidate() }
 }
 
 export function renameShape(editor: Editor, id: TLShapeId, value: string): string | null {

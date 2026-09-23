@@ -1,4 +1,5 @@
-import type { TLShape } from 'tldraw'
+import { lazy, Suspense } from 'react'
+import { TldrawUiDialogBody, useDialogs, type TLShape, type TLUiDialogProps } from 'tldraw'
 import { AgentHighlightOverlayUtil } from '../overlays/AgentHighlightOverlayUtil'
 import { TargetAreaTool } from '../tools/TargetAreaTool'
 import { TargetShapeTool } from '../tools/TargetShapeTool'
@@ -14,26 +15,17 @@ import { ShapeIdentityPanel } from '../bas/ShapeIdentityPanel'
 import { ShapeNavigationOverlay } from '../bas/ShapeNavigationOverlay'
 import { installShapeIdentities } from '../bas/shapeIdentity'
 import { useWorkspace } from '../bas/BasWorkspaceContext'
-import { useVectorPdfDialog } from '../bas/VectorPdfDialog'
 import { useWebViewDialog, WebViewSettings } from '../bas/WebViewSettings'
 import { WEB_VIEW_TYPE, WebViewShapeUtil, type WebViewShape } from '../bas/WebViewShape'
 import { BasdrawPluginRegistry } from './registry'
-import type { BasdrawPlugin, BasdrawToolbarGroup, BasdrawPluginCategory } from './types'
+import type { BasdrawPlugin, BasdrawToolbarGroup } from './types'
+import { builtinPluginManifest as manifest } from './pluginManifest'
 import { BaskstreamAgentConnectionProvider } from '../connections/baskstreamAgentAdapter'
 import { knowledgeBundles } from '../../shared/knowledge/bundles'
 import { initializeProjectIdentity } from '../knowledge/currentKnowledgeScope'
 import { behaviorAgentCapabilities, dataWidgetAgentCapabilities, webViewAgentCapabilities } from '../bas/agentCapabilities'
 import { RelationshipProperties, readRelationship, relationshipAgentCapabilities, useCreateRelationship } from '../relationships/relationships'
-
-const categories = {
-	core: { id: 'core', label: 'Core', order: 0 },
-	connections: { id: 'connections', label: 'Connections', order: 100 },
-	behaviors: { id: 'behaviors', label: 'Behaviors', order: 200 },
-	data: { id: 'data', label: 'Data & charts', order: 300 },
-	imports: { id: 'imports', label: 'Import & embed', order: 400 },
-	ai: { id: 'ai', label: 'AI & references', order: 500 },
-	systems: { id: 'systems', label: 'Systems & relationships', order: 350 },
-} satisfies Record<string, BasdrawPluginCategory>
+import { DocumentShapeUtil, DocumentProperties, DocumentNotifications, useImportDocument } from '../documents/DocumentShape'
 
 const icons = {
 	table: <svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="1" fill="none" stroke="currentColor" strokeWidth="1.5" /><path d="M3 9h18M3 14h18M9 4v16" fill="none" stroke="currentColor" strokeWidth="1.5" /></svg>,
@@ -49,7 +41,15 @@ const systemsGroup: BasdrawToolbarGroup = { id: 'systems', label: 'Systems', ico
 
 function useAddTable() { const open = useDataShapeDialog(); return () => open('table') }
 function useAddTrend() { const open = useDataShapeDialog(); return () => open('trend') }
-function useImportPdf() { return useVectorPdfDialog() }
+// The PDF dialog (and its vector splitter) loads on first use, shared with the document plugin's lazy import.
+const LazyVectorPdfDialog = lazy(() => import('../bas/VectorPdfDialog').then((module) => ({ default: module.VectorPdfDialog })))
+function VectorPdfDialogLoader(props: TLUiDialogProps) {
+	return <Suspense fallback={<TldrawUiDialogBody>Loading PDF import…</TldrawUiDialogBody>}><LazyVectorPdfDialog {...props} /></Suspense>
+}
+function useImportPdf() {
+	const { addDialog } = useDialogs()
+	return () => { addDialog({ id: 'bas-import-pdf', component: VectorPdfDialogLoader }) }
+}
 function useAddWebView() { return useWebViewDialog() }
 function RelationshipPropertiesContribution({ shape }: { shape: TLShape }) { return <RelationshipProperties shape={shape} /> }
 
@@ -60,9 +60,7 @@ function BehaviorProperties({ shape }: { shape: TLShape }) { return <BehaviorIns
 function NiagaraPanelContribution() { return <NiagaraPanel workspace={useWorkspace()} /> }
 
 const identityPlugin: BasdrawPlugin = {
-	category: categories.core,
-	id: 'shape-identity', version: '1.0.0', label: 'Shape identity', alwaysEnabled: true,
-	description: 'Stable names and identities used by navigation, relationships and AI context.',
+	...manifest.identity,
 	propertySections: [{ id: 'shape-identity', order: 100, supports: () => true, component: IdentityProperties }],
 	onEditorMount: (editor) => {
 		const stopProjectIdentity = initializeProjectIdentity(editor)
@@ -72,9 +70,7 @@ const identityPlugin: BasdrawPlugin = {
 }
 
 const baskstreamPlugin: BasdrawPlugin = {
-	category: categories.connections,
-	id: 'niagara-baskstream', version: '1.0.0', label: 'Niagara via baskStream', defaultEnabled: true,
-	description: 'Connects the canvas to Niagara stations through the local baskStream bridge.',
+	...manifest.baskstream,
 	providers: [
 		{ id: 'baskstream-point-drag', order: 100, component: PointDragProvider },
 		{ id: 'baskstream-agent-connection', order: 110, component: BaskstreamAgentConnectionProvider },
@@ -83,17 +79,14 @@ const baskstreamPlugin: BasdrawPlugin = {
 	canvasOverlays: [{ id: 'baskstream-point-drop', order: 100, component: CanvasPointDrop }],
 	connection: {
 		type: 'baskstream', label: 'Niagara via baskStream',
-		capabilities: ['browse', 'search', 'read', 'subscribe', 'read_history', 'read_schedule', 'read_alarms', 'read_tags'],
+		capabilities: ['browse', 'search', 'read', 'subscribe', 'read_history', 'read_schedule', 'read_alarms', 'read_tags', 'describe_write', 'write', 'write_tags', 'write_relations', 'ack_alarm', 'ack_alarms', 'clear_alarm', 'clear_alarms'],
 		references: ['baskstream-api'],
 	},
 	agent: { actions: ['connectionTool'], promptParts: ['connections'], references: ['baskstream-api'] },
 }
 
 const behaviorsPlugin: BasdrawPlugin = {
-	category: categories.behaviors,
-	id: 'live-behaviors', version: '1.0.0', label: 'Live behaviors', defaultEnabled: true,
-	description: 'Data-driven shape appearance, values, movement and navigation.',
-	dependencies: ['shape-identity'],
+	...manifest.behaviors,
 	propertySections: [{ id: 'live-behaviors', order: 900, supports: () => true, component: BehaviorProperties }],
 	shapeDecorators: [{ id: 'live-behavior-transforms', order: 100, component: RuntimeShapeDecorator }],
 	canvasOverlays: [
@@ -104,9 +97,7 @@ const behaviorsPlugin: BasdrawPlugin = {
 }
 
 const dataWidgetsPlugin: BasdrawPlugin = {
-	category: categories.data,
-	id: 'data-widgets', version: '1.0.0', label: 'Tables and charts', defaultEnabled: true,
-	description: 'Equipment tables and live trend charts.',
+	...manifest.dataWidgets,
 	tldraw: {
 		shapeUtils: dataWidgetShapeUtils,
 		translations: { 'tool.bas-table': 'Equipment table', 'tool.bas-trend': 'Trend chart' },
@@ -120,18 +111,23 @@ const dataWidgetsPlugin: BasdrawPlugin = {
 }
 
 const vectorPdfPlugin: BasdrawPlugin = {
-	category: categories.imports,
-	id: 'vector-pdf', version: '1.0.0', label: 'Vector PDF import', defaultEnabled: true,
-	description: 'Imports vector PDF pages as editable canvas artwork.',
+	...manifest.vectorPdf,
 	tldraw: { translations: { 'tool.bas-import-pdf': 'Import vector PDF' } },
 	toolbarItems: [{ id: 'bas-import-pdf', group: importGroup, label: 'tool.bas-import-pdf', icon: icons.pdf, order: 100, useSelect: useImportPdf }],
 	agent: { references: ['basdraw-vector-pdf'] },
 }
 
+const documentsPlugin: BasdrawPlugin = {
+	...manifest.documents,
+	tldraw: { shapeUtils: [DocumentShapeUtil], translations: { 'tool.bas-document': 'Document' } },
+	toolbarItems: [{ id: 'bas-document', group: importGroup, label: 'Import document', icon: icons.pdf, order: 50, useSelect: useImportDocument }],
+	propertySections: [{ id: 'document-source', order: 350, supports: shape => shape.type === 'bas-document' || shape.type === 'image' || Boolean(shape.meta.basDocumentAssetId), component: DocumentProperties }],
+	canvasOverlays: [{ id: 'document-notifications', order: 500, component: DocumentNotifications }],
+	agent: { references: ['basdraw:documents'] },
+}
+
 const webViewPlugin: BasdrawPlugin = {
-	category: categories.imports,
-	id: 'web-view', version: '1.0.0', label: 'Web View', defaultEnabled: true,
-	description: 'Places an interactive web surface on the canvas.',
+	...manifest.webView,
 	tldraw: { shapeUtils: [WebViewShapeUtil], translations: { 'tool.bas-web-view': 'Web View' } },
 	toolbarItems: [{ id: 'bas-web-view', group: importGroup, label: 'tool.bas-web-view', icon: icons.web, order: 200, useSelect: useAddWebView }],
 	propertySections: [{ id: 'web-view-settings', order: 300, supports: (shape) => shape.type === WEB_VIEW_TYPE, component: WebViewProperties }],
@@ -139,19 +135,14 @@ const webViewPlugin: BasdrawPlugin = {
 }
 
 const relationshipPlugin: BasdrawPlugin = {
-	category: categories.systems,
-	id: 'relationship-map', version: '1.0.0', label: 'Canvas relationships', defaultEnabled: true,
-	description: 'Connects existing canvas items with native tldraw arrows and lightweight relationship metadata.',
-	dependencies: ['shape-identity'],
+	...manifest.relationships,
 	toolbarItems: [{ id: 'bas-relationship', group: systemsGroup, label: 'Connect selected shapes', icon: icons.relationship, order: 100, useSelect: useCreateRelationship }],
 	propertySections: [{ id: 'relationship-settings', order: 400, supports: (shape) => Boolean(readRelationship(shape)), component: RelationshipPropertiesContribution }],
 	agent: { references: ['basdraw:relationships'], canvasCapabilities: relationshipAgentCapabilities },
 }
 
 const agentPlugin: BasdrawPlugin = {
-	category: categories.ai,
-	id: 'canvas-agent', version: '1.0.0', label: 'Canvas AI', defaultEnabled: true,
-	description: 'tldraw Agent Starter Kit canvas understanding and editing tools.',
+	...manifest.agent,
 	tldraw: {
 		tools: [TargetShapeTool, TargetAreaTool], overlayUtils: [AgentHighlightOverlayUtil],
 		uiTools: [
@@ -162,7 +153,7 @@ const agentPlugin: BasdrawPlugin = {
 	agent: { references: ['tldraw-agent-starter'] },
 }
 
-export const builtinPlugins: readonly BasdrawPlugin[] = [identityPlugin, baskstreamPlugin, behaviorsPlugin, dataWidgetsPlugin, vectorPdfPlugin, webViewPlugin, relationshipPlugin, agentPlugin].map((plugin) => ({
+export const builtinPlugins: readonly BasdrawPlugin[] = [identityPlugin, baskstreamPlugin, behaviorsPlugin, dataWidgetsPlugin, vectorPdfPlugin, documentsPlugin, webViewPlugin, relationshipPlugin, agentPlugin].map((plugin) => ({
 	...plugin, knowledge: knowledgeBundles.find((bundle) => bundle.pluginId === plugin.id),
 }))
 export const pluginRegistry = new BasdrawPluginRegistry(builtinPlugins)

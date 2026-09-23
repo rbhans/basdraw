@@ -1,4 +1,4 @@
-import { createContext, useContext, useMemo, useState, type ReactNode } from 'react'
+import { createContext, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { pluginRegistry } from './builtinPlugins'
 import type { BasdrawPlugin, BasdrawPluginPreferences } from './types'
 
@@ -16,6 +16,13 @@ const PluginContext = createContext<PluginContextValue | null>(null)
 
 export function BasdrawPluginProvider({ children }: { children: ReactNode }) {
 	const [preferences, setPreferences] = useState<BasdrawPluginPreferences>(readPreferences)
+	const loaded = useRef(preferences)
+	// Persist outside the state updater (updaters must stay pure); storage failure is non-fatal.
+	useEffect(() => {
+		if (preferences === loaded.current) return
+		try { window.localStorage.setItem(STORAGE_KEY, JSON.stringify(preferences)) }
+		catch (error) { console.warn('[basdraw] Add-on preferences could not be saved; they apply for this session only.', error) }
+	}, [preferences])
 	const enabled = useMemo(() => pluginRegistry.resolveEnabled(preferences), [preferences])
 	const enabledIds = useMemo(() => new Set(enabled.map((plugin) => plugin.id)), [enabled])
 	const value = useMemo<PluginContextValue>(() => ({
@@ -35,12 +42,15 @@ export function BasdrawPluginProvider({ children }: { children: ReactNode }) {
 				enableWithDependencies(id)
 			}
 			else { disabled.add(id); explicitlyEnabled.delete(id) }
-			const updated = { disabled: [...disabled], enabled: [...explicitlyEnabled] }
-			window.localStorage.setItem(STORAGE_KEY, JSON.stringify(updated))
-			return updated
+			return { disabled: [...disabled], enabled: [...explicitlyEnabled] }
 		}),
 	}), [enabled, enabledIds])
 	return <PluginContext.Provider value={value}>{children}</PluginContext.Provider>
+}
+
+/** For components that also render outside the plugin provider, such as QA harnesses. */
+export function useOptionalBasdrawPlugins() {
+	return useContext(PluginContext)
 }
 
 export function useBasdrawPlugins() {

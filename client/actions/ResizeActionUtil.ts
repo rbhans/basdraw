@@ -16,7 +16,7 @@ export const ResizeActionUtil = registerActionUtil(
 		}
 
 		override sanitizeAction(action: Streaming<ResizeAction>, helpers: AgentHelpers) {
-			const shapeIds = helpers.ensureShapeIdsExist(action.shapeIds ?? [])
+			const shapeIds = helpers.ensureShapeIdsAreEditable(action.shapeIds ?? [])
 			if (shapeIds.length === 0) return null
 
 			action.shapeIds = shapeIds

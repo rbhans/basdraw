@@ -16,7 +16,7 @@ export const DistributeActionUtil = registerActionUtil(
 		}
 
 		override sanitizeAction(action: Streaming<DistributeAction>, helpers: AgentHelpers) {
-			action.shapeIds = helpers.ensureShapeIdsExist(action.shapeIds ?? [])
+			action.shapeIds = helpers.ensureShapeIdsAreEditable(action.shapeIds ?? [])
 			return action
 		}
 

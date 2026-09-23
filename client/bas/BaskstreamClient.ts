@@ -1,4 +1,5 @@
 import type { ConnectionInput } from './types'
+import { ConnectionDispatchError } from '../../shared/connections.ts'
 
 type Message = Record<string, unknown>
 type PendingRequest = {
@@ -43,17 +44,32 @@ export class BaskstreamClient {
 	}
 
 	request(op: string, fields: Message = {}, timeoutMs = 15_000) {
-		if (!this.socket || this.socket.readyState !== WebSocket.OPEN) {
-			return Promise.reject(new Error('baskStream is not connected.'))
+		// Errors say whether the request left this client: 'not-sent' is safe to retry,
+		// 'unknown' (timeout or close after send) may already have been applied.
+		const socket = this.socket
+		if (!socket || socket.readyState !== WebSocket.OPEN) {
+			return Promise.reject(new ConnectionDispatchError('baskStream is not connected.', 'not-sent'))
 		}
 		const id = `bas-${++this.nextId}`
-		this.socket.send(JSON.stringify({ op, id, ...fields }))
+		let payload: string
+		try {
+			payload = JSON.stringify({ ...fields, op, id })
+		} catch {
+			return Promise.reject(new ConnectionDispatchError(`${op} could not be encoded.`, 'not-sent'))
+		}
 		return new Promise<Message>((resolve, reject) => {
 			const timer = window.setTimeout(() => {
 				this.pending.delete(id)
-				reject(new Error(`${op} timed out.`))
+				reject(new ConnectionDispatchError(`${op} timed out after it was sent. The station may have applied it.`, 'unknown'))
 			}, timeoutMs)
 			this.pending.set(id, { resolve, reject, timer })
+			try {
+				socket.send(payload)
+			} catch {
+				window.clearTimeout(timer)
+				this.pending.delete(id)
+				reject(new ConnectionDispatchError(`${op} could not be sent.`, 'not-sent'))
+			}
 		})
 	}
 
@@ -66,7 +82,7 @@ export class BaskstreamClient {
 		const socket = this.socket
 		this.socket = null
 		if (socket && socket.readyState < WebSocket.CLOSING) socket.close(1000, 'App disconnected')
-		this.rejectAll(new Error('baskStream disconnected.'))
+		this.rejectAll(new ConnectionDispatchError('baskStream disconnected before the station answered. The station may have applied the request.', 'unknown'))
 	}
 
 	private onMessage(raw: unknown) {
@@ -82,7 +98,7 @@ export class BaskstreamClient {
 		if (pending) {
 			this.pending.delete(id)
 			window.clearTimeout(pending.timer)
-			if (message.op === 'error') pending.reject(new Error(String(message.message || message.code || 'baskStream request failed.')))
+			if (message.op === 'error') pending.reject(new ConnectionDispatchError(String(message.message || message.code || 'baskStream request failed.'), 'rejected'))
 			else pending.resolve(message)
 			return
 		}
@@ -91,7 +107,7 @@ export class BaskstreamClient {
 
 	private onClosed() {
 		this.socket = null
-		this.rejectAll(new Error('Station connection closed.'))
+		this.rejectAll(new ConnectionDispatchError('Station connection closed before the station answered. The station may have applied the request.', 'unknown'))
 		for (const listener of this.listeners) listener({ op: 'station_closed' })
 	}
 
@@ -103,4 +119,3 @@ export class BaskstreamClient {
 		}
 	}
 }
-

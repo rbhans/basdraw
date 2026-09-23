@@ -67,10 +67,14 @@ export function formatSnapshot(snapshot: { displayValue?: string; value?: unknow
 	return String(snapshot.value)
 }
 
-export function snapshotState(snapshot: { ok?: boolean; status?: string; value?: unknown }) {
+export type SnapshotState = 'waiting' | 'alarm' | 'override' | 'stale' | 'active' | 'inactive' | 'ok'
+
+/** The one point-status classifier shared by labels, fills and data widgets. */
+export function snapshotState(snapshot?: { ok?: boolean; status?: string; value?: unknown }): SnapshotState {
+	if (!snapshot) return 'waiting'
 	const status = snapshot.status?.toLowerCase() || ''
-	if (snapshot.ok === false || /alarm|fault|down/.test(status)) return 'alarm'
-	if (/override/.test(status)) return 'override'
+	if (snapshot.ok === false || /alarm|fault|down|unacked/.test(status)) return 'alarm'
+	if (/overrid|forced/.test(status)) return 'override'
 	if (/stale/.test(status)) return 'stale'
 	if (typeof snapshot.value === 'boolean') return snapshot.value ? 'active' : 'inactive'
 	if (typeof snapshot.value === 'string') {

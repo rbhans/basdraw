@@ -1,4 +1,4 @@
-import type { BindingOptions, BindingValueMapping, CanvasDocument, ConnectionProfile, ShapeBinding } from './types'
+import type { BindingOptions, BindingValueMapping, CanvasDocument, ConnectionProfile, RuntimeProperty, ShapeBinding } from './types'
 
 const documentKey = 'bas-whiteboard.document.v2'
 const legacyDocumentKey = 'bas-whiteboard.document.v1'
@@ -22,10 +22,6 @@ export function loadCanvasDocument(): CanvasDocument {
 	}
 }
 
-export function saveCanvasDocument(document: CanvasDocument) {
-	localStorage.setItem(documentKey, JSON.stringify(document))
-}
-
 export function loadConnectionProfiles(): ConnectionProfile[] {
 	try {
 		const value = JSON.parse(localStorage.getItem(profilesKey) || '[]')
@@ -36,16 +32,29 @@ export function loadConnectionProfiles(): ConnectionProfile[] {
 	}
 }
 
+/** Returns false when browser storage is full or blocked; a working connection must not depend on it. */
 export function saveConnectionProfile(profile: ConnectionProfile) {
 	const profiles = loadConnectionProfiles().filter((candidate) => candidate.alias !== profile.alias)
-	localStorage.setItem(profilesKey, JSON.stringify([...profiles, profile]))
+	return writeProfiles([...profiles, profile])
 }
 
 export function removeConnectionProfile(alias: string) {
-	localStorage.setItem(
-		profilesKey,
-		JSON.stringify(loadConnectionProfiles().filter((profile) => profile.alias !== alias))
-	)
+	return writeProfiles(loadConnectionProfiles().filter((profile) => profile.alias !== alias))
+}
+
+function writeProfiles(profiles: ConnectionProfile[]) {
+	try {
+		localStorage.setItem(profilesKey, JSON.stringify(profiles))
+		return true
+	} catch {
+		return false
+	}
+}
+
+/** Options belong to one effect; a changed effect must not keep another effect's settings. */
+export function optionsMatchProperty(property: RuntimeProperty, options: BindingOptions | undefined) {
+	if (!options) return true
+	return options.kind === property
 }
 
 function isProfile(value: unknown): value is ConnectionProfile {
@@ -80,7 +89,7 @@ export function migrateBinding(value: unknown): ShapeBinding | null {
 		pointLabel: record.pointLabel,
 		runtimeProperty: record.runtimeProperty,
 		mapping: isMapping(record.mapping) ? record.mapping : { kind: 'auto' },
-		options: isBindingOptions(record.options) ? record.options : undefined,
+		options: isBindingOptions(record.options) && optionsMatchProperty(record.runtimeProperty, record.options) ? record.options : undefined,
 	}
 }
 

@@ -16,7 +16,7 @@ export const RotateActionUtil = registerActionUtil(
 		}
 
 		override sanitizeAction(action: Streaming<RotateAction>, helpers: AgentHelpers) {
-			action.shapeIds = helpers.ensureShapeIdsExist(action.shapeIds ?? [])
+			action.shapeIds = helpers.ensureShapeIdsAreEditable(action.shapeIds ?? [])
 			return action
 		}
 

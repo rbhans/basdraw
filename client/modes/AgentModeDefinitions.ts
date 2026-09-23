@@ -1,12 +1,9 @@
 import type { AgentAction } from '../../shared/types/AgentAction'
 import type { PromptPart } from '../../shared/types/PromptPart'
 // Import action utils to ensure they register themselves
-import { AddDetailActionUtil } from '../actions/AddDetailActionUtil'
 import { AlignActionUtil } from '../actions/AlignActionUtil'
 import { BringToFrontActionUtil } from '../actions/BringToFrontActionUtil'
 import { ClearActionUtil } from '../actions/ClearActionUtil'
-import { CountryInfoActionUtil } from '../actions/CountryInfoActionUtil'
-import { CountShapesActionUtil } from '../actions/CountShapesActionUtil'
 import { ConnectionToolActionUtil } from '../actions/ConnectionToolActionUtil'
 import { KnowledgeActionUtil } from '../actions/KnowledgeActionUtil'
 import { PluginContentActionUtil } from '../actions/PluginContentActionUtil'
@@ -39,6 +36,7 @@ import { DebugPartUtil } from '../parts/DebugPartUtil'
 import { MessagesPartUtil } from '../parts/MessagesPartUtil'
 import { ModelNamePartUtil } from '../parts/ModelNamePartUtil'
 import { KnowledgeScopePartUtil } from '../parts/KnowledgeScopePartUtil'
+import { DocumentsPartUtil } from '../parts/DocumentsPartUtil'
 import { ConnectionsPartUtil } from '../parts/ConnectionsPartUtil'
 import { AccessPolicyPartUtil } from '../parts/AccessPolicyPartUtil'
 import { PluginCapabilitiesPartUtil } from '../parts/PluginCapabilitiesPartUtil'
@@ -108,6 +106,7 @@ export const AGENT_MODE_DEFINITIONS = [
 			// Model
 			ModelNamePartUtil.type,
 			KnowledgeScopePartUtil.type,
+			DocumentsPartUtil.type,
 			ConnectionsPartUtil.type,
 			PluginCapabilitiesPartUtil.type,
 
@@ -148,7 +147,6 @@ export const AGENT_MODE_DEFINITIONS = [
 			// Planning
 			ThinkActionUtil.type,
 			ReviewActionUtil.type,
-			AddDetailActionUtil.type,
 			UpsertTodoListItemActionUtil.type,
 			SetMyViewActionUtil.type,
 
@@ -174,8 +172,6 @@ export const AGENT_MODE_DEFINITIONS = [
 			PenActionUtil.type,
 
 			// External APIs
-			CountryInfoActionUtil.type,
-			CountShapesActionUtil.type,
 			ConnectionToolActionUtil.type,
 			KnowledgeActionUtil.type,
 			PluginContentActionUtil.type,

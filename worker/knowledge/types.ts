@@ -1,4 +1,4 @@
-export type { KnowledgeKind, KnowledgeScopeType, KnowledgeEntry } from '../../shared/knowledge'
+export type { KnowledgeKind, KnowledgeScopeType, KnowledgeEntry, KnowledgeEntrySummary } from '../../shared/knowledge'
 
 export type KnowledgeContextScope = {
 	projectId?: string | null

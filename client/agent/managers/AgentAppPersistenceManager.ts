@@ -8,6 +8,12 @@ import { BaseAgentAppManager } from './BaseAgentAppManager'
 const STORAGE_PREFIX = 'tldraw-agent-app'
 
 /**
+ * How long to wait after the last change before saving. Streaming updates the chat
+ * history many times per second, so saves are debounced.
+ */
+const SAVE_DEBOUNCE_MS = 500
+
+/**
  * The persisted state for the entire app.
  * Contains state for all agents.
  */
@@ -37,6 +43,21 @@ export class AgentAppPersistenceManager extends BaseAgentAppManager {
 	 * Cleanup functions for per-agent state watchers, keyed by agent ID.
 	 */
 	private agentWatcherCleanupFns = new Map<string, () => void>()
+
+	/**
+	 * The pending debounced save, if any.
+	 */
+	private saveTimeout: ReturnType<typeof setTimeout> | null = null
+
+	/**
+	 * Whether the user has already been told that saving failed (only told once).
+	 */
+	private hasReportedSaveFailure = false
+
+	/**
+	 * Save immediately when the page is being hidden or unloaded.
+	 */
+	private handlePageHide = () => this.flushSave()
 
 	/**
 	 * Check if state is currently being loaded.
@@ -103,6 +124,9 @@ export class AgentAppPersistenceManager extends BaseAgentAppManager {
 	 * Reactively watches the agents list and all agent state.
 	 */
 	startAutoSave() {
+		globalThis.addEventListener?.('pagehide', this.handlePageHide)
+		globalThis.addEventListener?.('beforeunload', this.handlePageHide)
+
 		// Watch for changes to the agents list and set up per-agent watchers
 		this.agentsListCleanup = react('agents list', () => {
 			const agents = this.app.agents.getAgents()
@@ -129,7 +153,7 @@ export class AgentAppPersistenceManager extends BaseAgentAppManager {
 
 			// Save when agent list changes (if not loading)
 			if (!this.isLoadingState) {
-				this.saveState()
+				this.scheduleSave()
 			}
 		})
 	}
@@ -150,9 +174,30 @@ export class AgentAppPersistenceManager extends BaseAgentAppManager {
 
 			// Save if not currently loading
 			if (!this.isLoadingState) {
-				this.saveState()
+				this.scheduleSave()
 			}
 		})
+	}
+
+	/**
+	 * Schedule a debounced save.
+	 */
+	private scheduleSave() {
+		if (this.saveTimeout !== null) clearTimeout(this.saveTimeout)
+		this.saveTimeout = setTimeout(() => {
+			this.saveTimeout = null
+			this.saveState()
+		}, SAVE_DEBOUNCE_MS)
+	}
+
+	/**
+	 * Save now if a save is pending.
+	 */
+	flushSave() {
+		if (this.saveTimeout === null) return
+		clearTimeout(this.saveTimeout)
+		this.saveTimeout = null
+		this.saveState()
 	}
 
 	/**
@@ -172,6 +217,10 @@ export class AgentAppPersistenceManager extends BaseAgentAppManager {
 	 * Stop auto-saving and clean up watchers.
 	 */
 	stopAutoSave() {
+		// Save anything that's still pending before we stop watching
+		this.flushSave()
+		globalThis.removeEventListener?.('pagehide', this.handlePageHide)
+		globalThis.removeEventListener?.('beforeunload', this.handlePageHide)
 		if (this.agentsListCleanup) {
 			this.agentsListCleanup()
 			this.agentsListCleanup = null
@@ -230,8 +279,15 @@ export class AgentAppPersistenceManager extends BaseAgentAppManager {
 		try {
 			const fullKey = `${STORAGE_PREFIX}:${key}`
 			localStorage.setItem(fullKey, JSON.stringify(value))
-		} catch {
-			console.warn(`Couldn't save ${key} to localStorage`)
+			this.hasReportedSaveFailure = false
+		} catch (error) {
+			console.warn(`Couldn't save ${key} to localStorage`, error)
+			if (!this.hasReportedSaveFailure) {
+				this.hasReportedSaveFailure = true
+				this.app.options.onError(
+					'Canvas AI chat history could not be saved in this browser (storage may be full). Start a new chat to free up space.'
+				)
+			}
 		}
 	}
 }

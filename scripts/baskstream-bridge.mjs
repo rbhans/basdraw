@@ -3,6 +3,8 @@ import http from 'node:http'
 import https from 'node:https'
 import { decode, encode } from '@msgpack/msgpack'
 import { WebSocket, WebSocketServer } from 'ws'
+import { baskstreamWriteOperations, validateBaskstreamInput } from '../shared/baskstreamProtocol.ts'
+import { trustFailure } from './local-trust.mjs'
 
 const host = '127.0.0.1'
 const port = Number(process.env.BAS_WHITEBOARD_BRIDGE_PORT || 8788)
@@ -13,6 +15,7 @@ const readOnlyOperations = new Set([
 	'capabilities',
 	'describe',
 	'describe_history',
+	'describe_write',
 	'ping',
 	'read',
 	'read_alarms',
@@ -45,22 +48,90 @@ const server = http.createServer((request, response) => {
 	response.end('Not found')
 })
 
-const browserSockets = new WebSocketServer({ server, path: '/baskstream', maxPayload: 1024 * 1024 })
+const browserSockets = new WebSocketServer({ server, path: '/baskstream', maxPayload: 1024 * 1024, verifyClient: ({ req }) => {
+	const failure = trustFailure(req, { port, requireOrigin: true })
+	if (failure) console.warn(`baskStream bridge: rejected WebSocket upgrade (${failure}).`)
+	return !failure
+} })
 
 browserSockets.on('connection', (browser) => {
 	let station = null
 	let connecting = false
+	let browserGone = false
 
 	const sendBrowser = (message) => {
 		if (browser.readyState === WebSocket.OPEN) browser.send(JSON.stringify(message))
 	}
+	const isBrowserGone = () => browserGone || browser.readyState !== WebSocket.OPEN
 
 	const closeStation = () => {
 		if (station && station.readyState < WebSocket.CLOSING) station.close(1000, 'Browser disconnected')
 		station = null
 	}
+	const onBrowserGone = () => {
+		browserGone = true
+		closeStation()
+	}
 
-	browser.on('message', async (payload, isBinary) => {
+	async function connect(message) {
+		if (connecting) {
+			sendBrowser({ op: 'error', id: message.id, code: 'connect_in_progress', message: 'A station connection is already in progress.' })
+			return
+		}
+		connecting = true
+		closeStation()
+		let next = null
+		try {
+			const base = stationBaseUrl(message.stationUrl)
+			const tlsMode = message.tlsMode === 'insecure' ? 'insecure' : 'strict'
+			if (tlsMode === 'insecure') {
+				// Certificate verification is off: anyone on the network path can impersonate
+				// the station (MITM) and receive the SCRAM exchange and session cookies.
+				console.warn(`baskStream bridge: TLS certificate verification DISABLED for ${base.host}. Connection is vulnerable to man-in-the-middle attacks.`)
+			}
+			const cookies = new Map()
+			const health = await login(base, text(message.username), text(message.password), cookies, tlsMode)
+			if (isBrowserGone()) return
+			next = await connectStation(base, cookies, tlsMode)
+			if (isBrowserGone()) {
+				next.close(1000, 'Browser disconnected')
+				return
+			}
+			const socket = next
+			station = socket
+			socket.on('message', (frame, stationIsBinary) => {
+				if (!stationIsBinary || station !== socket) return
+				try {
+					sendBrowser(decode(frame))
+				} catch {
+					sendBrowser({ op: 'error', code: 'station_decode_failed', message: 'Station sent malformed MessagePack.' })
+					socket.close(1002, 'Malformed MessagePack')
+				}
+			})
+			// Only the current connection may report to the browser; a replaced socket closes silently.
+			socket.once('close', () => {
+				if (station !== socket) return
+				station = null
+				sendBrowser({ op: 'station_closed' })
+			})
+			socket.on('error', (error) => {
+				if (station === socket) sendBrowser({ op: 'error', code: 'station_ws_error', message: error.message })
+			})
+			sendBrowser({ op: 'station_connected', id: message.id, health })
+		} catch (error) {
+			if (next && next !== station && next.readyState < WebSocket.CLOSING) next.close(1000, 'Connection abandoned')
+			sendBrowser({
+				op: 'error',
+				id: message.id,
+				code: 'connect_failed',
+				message: error instanceof Error ? error.message : String(error),
+			})
+		} finally {
+			connecting = false
+		}
+	}
+
+	async function handleMessage(payload, isBinary) {
 		if (isBinary) {
 			sendBrowser({ op: 'error', code: 'bad_request', message: 'Expected JSON text frames.' })
 			return
@@ -73,41 +144,13 @@ browserSockets.on('connection', (browser) => {
 			sendBrowser({ op: 'error', code: 'bad_request', message: 'Invalid JSON frame.' })
 			return
 		}
+		if (!isPlainObject(message)) {
+			sendBrowser({ op: 'error', code: 'bad_request', message: 'Expected a JSON object frame.' })
+			return
+		}
 
 		if (message.op === 'connect_station') {
-			if (connecting) return
-			connecting = true
-			closeStation()
-			try {
-				const base = stationBaseUrl(message.stationUrl)
-				const tlsMode = message.tlsMode === 'insecure' ? 'insecure' : 'strict'
-				const cookies = new Map()
-				const health = await login(base, text(message.username), text(message.password), cookies, tlsMode)
-				station = await connectStation(base, cookies, tlsMode)
-				station.on('message', (frame, stationIsBinary) => {
-					if (!stationIsBinary) return
-					try {
-						sendBrowser(decode(frame))
-					} catch {
-						sendBrowser({ op: 'error', code: 'station_decode_failed', message: 'Station sent malformed MessagePack.' })
-						station?.close(1002, 'Malformed MessagePack')
-					}
-				})
-				station.once('close', () => sendBrowser({ op: 'station_closed' }))
-				station.once('error', (error) => {
-					sendBrowser({ op: 'error', code: 'station_ws_error', message: error.message })
-				})
-				sendBrowser({ op: 'station_connected', id: message.id, health })
-			} catch (error) {
-				sendBrowser({
-					op: 'error',
-					id: message.id,
-					code: 'connect_failed',
-					message: error instanceof Error ? error.message : String(error),
-				})
-			} finally {
-				connecting = false
-			}
+			await connect(message)
 			return
 		}
 
@@ -115,12 +158,20 @@ browserSockets.on('connection', (browser) => {
 			sendBrowser({ op: 'error', id: message.id, code: 'not_connected', message: 'Station WebSocket is not connected.' })
 			return
 		}
-		if (!readOnlyOperations.has(text(message.op))) {
+		const writeOperation = baskstreamWriteOperations.has(text(message.op))
+		if (writeOperation) {
+			try {
+				if (message.confirmedWrite !== true) throw new Error('Station writes require confirmation in basdraw.')
+				const { op, id, confirmedWrite: _confirmed, ...input } = message
+				message = { ...validateBaskstreamInput(op, input), op, id }
+			} catch (error) { sendBrowser({ op: 'error', id: message.id, code: 'invalid_write', message: error instanceof Error ? error.message : String(error) }); return }
+		}
+		if (!readOnlyOperations.has(text(message.op)) && !writeOperation) {
 			sendBrowser({
 				op: 'error',
 				id: message.id,
-				code: 'read_only_bridge',
-				message: `Operation ${text(message.op) || '(missing)'} is not allowed by the read-only basdraw bridge.`,
+				code: 'unsupported_operation',
+				message: `Operation ${text(message.op) || '(missing)'} is not supported by the basdraw bridge.`,
 			})
 			return
 		}
@@ -135,10 +186,23 @@ browserSockets.on('connection', (browser) => {
 				message: error instanceof Error ? error.message : String(error),
 			})
 		}
+	}
+
+	browser.on('message', (payload, isBinary) => {
+		handleMessage(payload, isBinary).catch((error) => {
+			console.error('baskStream bridge: message handler failed:', error)
+			sendBrowser({ op: 'error', code: 'bridge_error', message: error instanceof Error ? error.message : String(error) })
+		})
 	})
 
-	browser.on('close', closeStation)
-	browser.on('error', closeStation)
+	browser.on('close', onBrowserGone)
+	browser.on('error', onBrowserGone)
+})
+
+// Last resort: every handler above catches its own errors, but a stray rejection
+// must not take down the bridge for every open canvas.
+process.on('unhandledRejection', (error) => {
+	console.error('baskStream bridge: unhandled rejection:', error)
 })
 
 server.listen(port, host, () => {
@@ -252,6 +316,7 @@ function stationRequest(base, cookies, tlsMode, method, pathname, body = '', hea
 				},
 			},
 			(response) => {
+				response.on('error', reject)
 				storeCookies(cookies, response.headers)
 				const chunks = []
 				let received = 0
@@ -339,6 +404,10 @@ function storeCookies(cookies, headers) {
 		const index = pair.indexOf('=')
 		if (index > 0) cookies.set(pair.slice(0, index), pair.slice(index + 1))
 	}
+}
+
+function isPlainObject(value) {
+	return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
 function text(value) {

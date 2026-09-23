@@ -1,4 +1,4 @@
-import { resolveBehaviorChannels } from './behaviorDefinitions'
+import { resolveBehaviorChannels } from './behaviorDefinitions.ts'
 import type { BindingValueMapping, PointSnapshot, RuntimeProperty, ShapeBinding } from './types'
 
 export type RuntimeShapePresentation = {
@@ -8,9 +8,11 @@ export type RuntimeShapePresentation = {
 	rotation?: number
 	scale?: number
 	spin?: { id: string; secondsPerTurn: number; direction: 'clockwise' | 'counterclockwise' }
-	motions?: Array<{ id: string; x: number; y: number; secondsPerCycle: number }>
-	motion?: { id: string; x: number; y: number; secondsPerCycle: number }
+	/** Continuous travel, at most one per movement axis (separate channels), ordered x then y. */
+	motions?: RuntimeMotionCycle[]
 }
+
+export type RuntimeMotionCycle = { id: string; x: number; y: number; secondsPerCycle: number }
 
 export function evaluateBinding(binding: ShapeBinding, snapshot: PointSnapshot): number | null {
 	return evaluateMapping(binding.mapping || { kind: 'auto' }, snapshot)
@@ -43,8 +45,8 @@ export function evaluateMapping(mapping: BindingValueMapping, snapshot: PointSna
 }
 
 export function getRuntimeShapePresentation(
-	bindings: ShapeBinding[],
-	snapshots: Record<string, PointSnapshot>,
+	bindings: readonly ShapeBinding[],
+	snapshots: Readonly<Record<string, PointSnapshot>>,
 ): RuntimeShapePresentation {
 	const presentation: RuntimeShapePresentation = {}
 	for (const binding of resolveBehaviorChannels(bindings)) {
@@ -96,7 +98,7 @@ export function getRuntimeShapePresentation(
 							y: options.axis === 'y' ? signedDistance : 0,
 							secondsPerCycle: clamp(options.secondsPerCycle, 0.2, 120),
 						}
-						presentation.motions = [...(presentation.motions || []), motion]
+						presentation.motions = [...(presentation.motions || []), motion].sort((a, b) => Number(a.x === 0) - Number(b.x === 0))
 					}
 				} else {
 					presentation.translation = {

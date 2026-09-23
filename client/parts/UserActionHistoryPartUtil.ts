@@ -5,6 +5,7 @@ import {
 	convertTldrawShapeToFocusedType,
 } from '../../shared/format/convertTldrawShapeToFocusedShape'
 import { FocusedShape } from '../../shared/format/FocusedShape'
+import { getChangedFields } from '../../shared/format/jsonEqual'
 import { UserActionHistoryPart } from '../../shared/schema/PromptPartDefinitions'
 import { AgentRequest } from '../../shared/types/AgentRequest'
 import { AgentHelpers } from '../AgentHelpers'
@@ -77,34 +78,20 @@ export const UserActionHistoryPartUtil = registerPromptPartUtil(
 
 /**
  * Get any changed properties between two focused shapes.
+ * Uses structural equality: conversions build fresh objects (e.g. unknown-shape props),
+ * so reference equality would report every update as a props change.
  * @param from - The original shape.
  * @param to - The new shape.
- * @returns The changed properties.
+ * @returns The changed properties, or null if nothing the model can see changed.
  */
-function getFocusedShapeChange<T extends FocusedShape['_type']>(
-	from: FocusedShape & { _type: T },
-	to: FocusedShape & { _type: T }
-) {
+function getFocusedShapeChange(from: FocusedShape, to: FocusedShape) {
 	if (from._type !== to._type) {
 		return null
 	}
-
-	const change: {
-		from: Partial<FocusedShape>
-		to: Partial<FocusedShape>
-	} = {
-		from: {},
-		to: {},
-	}
-
-	for (const key in to) {
-		const fromValue = from[key]
-		const toValue = to[key]
-		if (fromValue === toValue) {
-			continue
-		}
-		;(change.from as any)[key] = fromValue
-		;(change.to as any)[key] = toValue
-	}
-	return change
+	const change = getChangedFields(
+		from as unknown as Record<string, unknown>,
+		to as unknown as Record<string, unknown>
+	)
+	if (!change) return null
+	return change as { from: Partial<FocusedShape>; to: Partial<FocusedShape> }
 }

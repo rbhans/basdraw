@@ -33,17 +33,31 @@ export class AgentDurableObject extends DurableObject<Environment> {
 	 * @returns A Promise that resolves to a Response object containing the streamed changes.
 	 */
 	private async stream(request: Request): Promise<Response> {
+		let prompt: AgentPrompt
+		try {
+			prompt = (await request.json()) as AgentPrompt
+		} catch {
+			return Response.json({ error: 'The agent request body must be JSON.' }, { status: 400 })
+		}
+		if (!prompt || typeof prompt !== 'object' || Array.isArray(prompt)) {
+			return Response.json({ error: 'The agent request body must be a prompt object.' }, { status: 400 })
+		}
+
 		const encoder = new TextEncoder()
 		const { readable, writable } = new TransformStream()
 		const writer = writable.getWriter()
+		// Aborted when the client disconnects (request.signal) or the response stream is cancelled.
+		const controller = new AbortController()
+		const abort = () => controller.abort()
+		if (request.signal.aborted) abort()
+		else request.signal.addEventListener('abort', abort, { once: true })
 
 		const response: { changes: Streaming<AgentAction>[] } = { changes: [] }
 
 		;(async () => {
 			try {
-				const prompt = (await request.json()) as AgentPrompt
-
-				for await (const change of this.service.stream(prompt)) {
+				for await (const change of this.service.stream(prompt, controller.signal)) {
+					if (controller.signal.aborted) break
 					response.changes.push(change)
 					const data = `data: ${JSON.stringify(change)}\n\n`
 					await writer.write(encoder.encode(data))
@@ -51,6 +65,10 @@ export class AgentDurableObject extends DurableObject<Environment> {
 				}
 				await writer.close()
 			} catch (error: any) {
+				if (controller.signal.aborted) {
+					await writer.abort(error).catch(() => {})
+					return
+				}
 				console.error('Stream error:', error)
 
 				// Send error through the stream
@@ -59,10 +77,16 @@ export class AgentDurableObject extends DurableObject<Environment> {
 					await writer.write(encoder.encode(errorData))
 					await writer.close()
 				} catch (writeError) {
-					await writer.abort(writeError)
+					abort()
+					await writer.abort(writeError).catch(() => {})
 				}
+			} finally {
+				request.signal.removeEventListener('abort', abort)
 			}
 		})()
+
+		// If the reader goes away, stop generating instead of writing into a dead stream.
+		writer.closed.catch(abort)
 
 		return new Response(readable, {
 			headers: {
@@ -71,9 +95,6 @@ export class AgentDurableObject extends DurableObject<Environment> {
 				Connection: 'keep-alive',
 				'X-Accel-Buffering': 'no',
 				'Transfer-Encoding': 'chunked',
-				'Access-Control-Allow-Origin': '*',
-				'Access-Control-Allow-Methods': 'POST, OPTIONS',
-				'Access-Control-Allow-Headers': 'Content-Type',
 			},
 		})
 	}

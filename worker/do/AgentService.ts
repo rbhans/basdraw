@@ -23,12 +23,15 @@ import { AgentPrompt } from '../../shared/types/AgentPrompt'
 import { Streaming } from '../../shared/types/Streaming'
 import { Environment } from '../environment'
 import { KnowledgeStore } from '../knowledge/KnowledgeStore'
-import { KnowledgeService, formatKnowledgeCatalog } from '../knowledge/KnowledgeService'
+import { KnowledgeService, formatKnowledgeCatalog, formatUntrustedKnowledge } from '../knowledge/KnowledgeService'
 import { knowledgeBundles } from '../../shared/knowledge/bundles'
 import { buildMessages } from '../prompt/buildMessages'
 import { buildSystemPrompt } from '../prompt/buildSystemPrompt'
 import { getModelName } from '../prompt/getModelName'
 import { closeAndParseJson } from './closeAndParseJson'
+
+const CODEX_BRIDGE_START_TIMEOUT_MS = 60_000
+const CODEX_BRIDGE_IDLE_TIMEOUT_MS = 180_000
 
 export class AgentService {
 	openai: OpenAIProvider
@@ -62,9 +65,9 @@ export class AgentService {
 		return this[provider](modelDefinition.id)
 	}
 
-	async *stream(prompt: AgentPrompt): AsyncGenerator<Streaming<AgentAction>> {
+	async *stream(prompt: AgentPrompt, signal?: AbortSignal): AsyncGenerator<Streaming<AgentAction>> {
 		try {
-			for await (const event of this.streamActions(prompt)) {
+			for await (const event of this.streamActions(prompt, signal)) {
 				yield event
 			}
 		} catch (error: any) {
@@ -73,7 +76,7 @@ export class AgentService {
 		}
 	}
 
-	private async *streamActions(prompt: AgentPrompt): AsyncGenerator<Streaming<AgentAction>> {
+	private async *streamActions(prompt: AgentPrompt, signal?: AbortSignal): AsyncGenerator<Streaming<AgentAction>> {
 		const modelName = getModelName(prompt)
 		const modelDefinition = getAgentModelDefinition(modelName)
 		const isCodexSubscription = modelDefinition.provider === 'codex'
@@ -138,10 +141,11 @@ export class AgentService {
 
 		try {
 			const textStream: AsyncIterable<string> = isCodexSubscription
-				? this.streamCodexSubscription(prompt, systemPrompt, messages, modelDefinition.id)
+				? this.streamCodexSubscription(prompt, systemPrompt, messages, modelDefinition.id, signal)
 				: streamText({
 					model: model!,
 					messages,
+					abortSignal: signal,
 					maxOutputTokens: 8192,
 					// Opus 4.7+ removed `temperature` (and top_p/top_k); sending it returns a 400.
 					...(modelDefinition.supportsTemperature ? { temperature: 0 } : {}),
@@ -228,47 +232,74 @@ export class AgentService {
 		prompt: AgentPrompt,
 		systemPrompt: string,
 		messages: ModelMessage[],
-		modelId: string
+		modelId: string,
+		signal?: AbortSignal
 	): AsyncGenerator<string> {
 		const mode = prompt.mode
 		if (!mode) throw new Error('A mode part is required for Codex structured output.')
-		const response = await fetch(`${(this.env.CODEX_BRIDGE_URL || 'http://127.0.0.1:8791').replace(/\/$/, '')}/generate`, {
-			method: 'POST',
-			headers: { 'Content-Type': 'application/json', 'X-Basdraw-Codex': '1' },
-			body: JSON.stringify({
-				model: modelId,
-				effort: prompt.modelName?.reasoningEffort || 'low',
-				systemPrompt: systemPrompt + '\nFor strict structured output, represent unused optional fields as null and open argument maps as JSON-encoded strings, as specified in the output schema.',
-				input: toCodexInput(messages.filter((message) => message.role !== 'system')),
-				outputSchema: toStrictOutputSchema(buildResponseSchema(mode.actionTypes, mode.modeType)),
-			}),
-		})
-		if (!response.ok) {
-			const result = await response.json().catch(() => null) as { error?: string } | null
-			throw new Error(result?.error || `Codex subscription bridge returned ${response.status}.`)
+		// One controller covers the caller's abort, a response-start timeout and an idle timeout.
+		const controller = new AbortController()
+		const abortFromCaller = () => controller.abort(signal?.reason)
+		if (signal?.aborted) abortFromCaller()
+		else signal?.addEventListener('abort', abortFromCaller, { once: true })
+		let timer: ReturnType<typeof setTimeout> | undefined
+		const arm = (ms: number, message: string) => {
+			clearTimeout(timer)
+			timer = setTimeout(() => controller.abort(new Error(message)), ms)
 		}
-		if (!response.body) throw new Error('Codex subscription bridge returned no response body.')
+		let reader: ReadableStreamDefaultReader<Uint8Array> | undefined
+		try {
+			arm(CODEX_BRIDGE_START_TIMEOUT_MS, 'The Codex subscription bridge did not respond in time.')
+			const response = await fetch(`${(this.env.CODEX_BRIDGE_URL || 'http://127.0.0.1:8791').replace(/\/$/, '')}/generate`, {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json', 'X-Basdraw-Codex': '1' },
+				body: JSON.stringify({
+					model: modelId,
+					effort: prompt.modelName?.reasoningEffort || 'low',
+					systemPrompt: systemPrompt + '\nFor strict structured output, represent unused optional fields as null and open argument maps as JSON-encoded strings, as specified in the output schema.',
+					input: toCodexInput(messages.filter((message) => message.role !== 'system')),
+					outputSchema: toStrictOutputSchema(buildResponseSchema(mode.actionTypes, mode.modeType)),
+				}),
+				signal: controller.signal,
+			})
+			if (!response.ok) {
+				const result = await response.json().catch(() => null) as { error?: string } | null
+				throw new Error(result?.error || `Codex subscription bridge returned ${response.status}.`)
+			}
+			if (!response.body) throw new Error('Codex subscription bridge returned no response body.')
 
-		const reader = response.body.getReader()
-		const decoder = new TextDecoder()
-		let buffer = ''
-		while (true) {
-			const { value, done } = await reader.read()
-			buffer += decoder.decode(value || new Uint8Array(), { stream: !done })
-			const lines = buffer.split('\n')
-			buffer = lines.pop() || ''
-			for (const line of lines) {
-				if (!line.trim()) continue
-				const event = JSON.parse(line) as { delta?: string; error?: string }
+			reader = response.body.getReader()
+			const decoder = new TextDecoder()
+			let buffer = ''
+			while (true) {
+				arm(CODEX_BRIDGE_IDLE_TIMEOUT_MS, 'The Codex subscription bridge stopped responding.')
+				const { value, done } = await reader.read()
+				buffer += decoder.decode(value || new Uint8Array(), { stream: !done })
+				const lines = buffer.split('\n')
+				buffer = lines.pop() || ''
+				for (const line of lines) {
+					if (!line.trim()) continue
+					const event = JSON.parse(line) as { delta?: string; error?: string }
+					if (event.error) throw new Error(event.error)
+					if (event.delta) yield event.delta
+				}
+				if (done) break
+			}
+			if (buffer.trim()) {
+				const event = JSON.parse(buffer) as { delta?: string; error?: string }
 				if (event.error) throw new Error(event.error)
 				if (event.delta) yield event.delta
 			}
-			if (done) break
-		}
-		if (buffer.trim()) {
-			const event = JSON.parse(buffer) as { delta?: string; error?: string }
-			if (event.error) throw new Error(event.error)
-			if (event.delta) yield event.delta
+		} catch (error) {
+			// Surface the timeout message rather than a generic AbortError.
+			if (controller.signal.aborted && controller.signal.reason instanceof Error && !signal?.aborted) throw controller.signal.reason
+			throw error
+		} finally {
+			clearTimeout(timer)
+			signal?.removeEventListener('abort', abortFromCaller)
+			// Cancelling the body closes the bridge connection, which stops the Codex turn.
+			if (reader) await reader.cancel().catch(() => {})
+			else controller.abort()
 		}
 	}
 
@@ -292,7 +323,7 @@ export class AgentService {
 			}))
 			return {
 				role: 'user',
-				content: [{ type: 'text', text: formatKnowledgeCatalog(catalog) + '\n[EXPLICITLY LOADED KNOWLEDGE]\n' + JSON.stringify(loaded) }],
+				content: [{ type: 'text', text: formatKnowledgeCatalog(catalog) + '\n' + formatUntrustedKnowledge('explicitly loaded knowledge', loaded) }],
 			}
 		} catch (error) {
 			console.warn('Knowledge context unavailable:', error)

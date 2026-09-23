@@ -1,5 +1,15 @@
 import type { CreateKnowledgeEntryInput, UpdateKnowledgeEntryInput } from './schemas'
-import type { KnowledgeContextScope, KnowledgeEntry, KnowledgeKind, KnowledgeScopeType } from './types'
+import type { KnowledgeContextScope, KnowledgeEntry, KnowledgeEntrySummary, KnowledgeKind, KnowledgeScopeType } from './types'
+
+const LIST_PAGE_SIZE = 50
+const LIST_PAGE_SIZE_MAX = 100
+/**
+ * D1 allows 100 bound parameters per statement. Plugin and connection id lists
+ * travel as a single JSON parameter (json_each), so statements stay under ~15
+ * parameters regardless of list length; the lists are still capped.
+ * basdraw ships ~40 built-in plugins, so the cap leaves headroom.
+ */
+export const MAX_SCOPE_IDS = 100
 
 type KnowledgeRow = {
 	id: string
@@ -54,20 +64,36 @@ export class KnowledgeStore {
 		return (result.results ?? []).map(toKnowledgeEntry)
 	}
 
-	async list(filters: { kind?: KnowledgeKind; scopeType?: KnowledgeScopeType; scopeId?: string; enabled?: boolean } = {}) {
+	/** Administrative metadata listing. Bodies are fetched per entry with `get`. */
+	async list(filters: { kind?: KnowledgeKind; scopeType?: KnowledgeScopeType; scopeId?: string; enabled?: boolean; cursor?: string; limit?: number } = {}) {
 		const conditions: string[] = []
 		const values: unknown[] = []
 		if (filters.kind) { conditions.push('kind = ?'); values.push(filters.kind) }
 		if (filters.scopeType) { conditions.push('scope_type = ?'); values.push(filters.scopeType) }
 		if (filters.scopeId) { conditions.push('scope_id = ?'); values.push(filters.scopeId) }
 		if (typeof filters.enabled === 'boolean') { conditions.push('enabled = ?'); values.push(filters.enabled ? 1 : 0) }
+		const after = filters.cursor ? decodeListCursor(filters.cursor) : null
+		if (filters.cursor && !after) throw new Error('Invalid knowledge list cursor.')
+		if (after) {
+			conditions.push('(priority < ? OR (priority = ? AND updated_at < ?) OR (priority = ? AND updated_at = ? AND id > ?))')
+			values.push(after.priority, after.priority, after.updatedAt, after.priority, after.updatedAt, after.id)
+		}
+		const limit = Math.min(Math.max(Math.trunc(filters.limit ?? LIST_PAGE_SIZE), 1), LIST_PAGE_SIZE_MAX)
 		const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : ''
 		const result = await this.database.prepare(`
-			SELECT * FROM knowledge_entries ${where}
-			ORDER BY priority DESC, updated_at DESC
-			LIMIT 500
-		`).bind(...values).all<KnowledgeRow>()
-		return (result.results ?? []).map(toKnowledgeEntry)
+			SELECT id, kind, title, description, '' AS content, length(content) AS content_length, scope_type, scope_id,
+			 enabled, priority, source, plugin_id, tags_json, created_at, updated_at
+			FROM knowledge_entries ${where}
+			ORDER BY priority DESC, updated_at DESC, id
+			LIMIT ?
+		`).bind(...values, limit + 1).all<KnowledgeRow & { content_length: number }>()
+		const rows = result.results ?? []
+		const entries: KnowledgeEntrySummary[] = rows.slice(0, limit).map((row) => {
+			const { content: _content, ...entry } = toKnowledgeEntry(row)
+			return { ...entry, contentLength: row.content_length }
+		})
+		const last = rows.length > limit ? rows[limit - 1] : null
+		return { entries, nextCursor: last ? encodeListCursor({ priority: last.priority, updatedAt: last.updated_at, id: last.id }) : null }
 	}
 
 	async get(id: string) {
@@ -137,13 +163,29 @@ function scopeFilter(scope: KnowledgeContextScope) {
 	const values: unknown[] = []
 	const clauses = ["scope_type = 'global'"]
 	if (scope.projectId) { clauses.push("(scope_type = 'project' AND scope_id = ?)"); values.push(scope.projectId) }
-	for (const id of [...new Set([scope.connectionId, ...(scope.connectionIds ?? [])])].filter(Boolean)) {
-		clauses.push("(scope_type = 'connection' AND scope_id = ?)"); values.push(id)
+	const connections = [...new Set([scope.connectionId, ...(scope.connectionIds ?? [])])].filter((id): id is string => Boolean(id)).slice(0, MAX_SCOPE_IDS + 1)
+	if (connections.length) {
+		clauses.push("(scope_type = 'connection' AND scope_id IN (SELECT value FROM json_each(?)))"); values.push(JSON.stringify(connections))
 	}
-	const plugins = [...new Set(scope.pluginIds ?? [])]
-	const pluginClause = plugins.length ? `AND (plugin_id IS NULL OR plugin_id IN (${plugins.map(() => '?').join(',')}))` : 'AND plugin_id IS NULL'
-	values.push(...plugins)
+	const plugins = [...new Set(scope.pluginIds ?? [])].slice(0, MAX_SCOPE_IDS)
+	const pluginClause = plugins.length ? 'AND (plugin_id IS NULL OR plugin_id IN (SELECT value FROM json_each(?)))' : 'AND plugin_id IS NULL'
+	if (plugins.length) values.push(JSON.stringify(plugins))
 	return { sql: `enabled = 1 AND (${clauses.join(' OR ')}) ${pluginClause}`, values }
+}
+
+type ListCursor = { priority: number; updatedAt: number; id: string }
+
+function encodeListCursor(cursor: ListCursor) {
+	return btoa(JSON.stringify([cursor.priority, cursor.updatedAt, cursor.id])).replace(/=+$/, '')
+}
+
+function decodeListCursor(value: string): ListCursor | null {
+	try {
+		const parsed: unknown = JSON.parse(atob(value))
+		if (!Array.isArray(parsed) || parsed.length !== 3) return null
+		const [priority, updatedAt, id] = parsed
+		return Number.isInteger(priority) && Number.isInteger(updatedAt) && typeof id === 'string' ? { priority, updatedAt, id } : null
+	} catch { return null }
 }
 
 function toKnowledgeEntry(row: KnowledgeRow): KnowledgeEntry {

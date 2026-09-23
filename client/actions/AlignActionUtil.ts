@@ -16,7 +16,7 @@ export const AlignActionUtil = registerActionUtil(
 		}
 
 		override sanitizeAction(action: Streaming<AlignAction>, helpers: AgentHelpers) {
-			action.shapeIds = helpers.ensureShapeIdsExist(action.shapeIds ?? [])
+			action.shapeIds = helpers.ensureShapeIdsAreEditable(action.shapeIds ?? [])
 			return action
 		}
 

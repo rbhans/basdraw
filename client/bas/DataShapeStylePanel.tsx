@@ -1,10 +1,12 @@
 import { useRef } from 'react'
 import {
 	DefaultStylePanel, usePassThroughWheelEvents, useEditor, useValue,
-	type TLUiStylePanelProps,
+	type TLShape, type TLUiStylePanelProps,
 } from 'tldraw'
 import { useBasdrawPlugins } from '../plugins/PluginContext'
 import { pluginRegistry } from '../plugins/builtinPlugins'
+import { PluginBoundary } from '../plugins/PluginBoundary'
+import type { BasdrawPropertySection } from '../plugins/types'
 
 export function DataShapeStylePanel(props: TLUiStylePanelProps) {
 	const editor = useEditor()
@@ -20,10 +22,17 @@ export function DataShapeStylePanel(props: TLUiStylePanelProps) {
 			onKeyDown={(event) => {
 				if (event.key === 'Escape') { event.stopPropagation(); editor.focus() }
 			}}>
-		{sections.filter((section) => section.supports(shape)).map((section) => {
+		{sections.filter((section) => safeSupports(section, shape)).map((section) => {
 			const Section = section.component
-			return <Section key={`${section.id}:${shape.id}`} shape={shape} />
+			return <PluginBoundary key={`${section.id}:${shape.id}`} label={section.pluginLabel} contribution={section.id} fallback="inline">
+				<Section shape={shape} />
+			</PluginBoundary>
 		})}
 		</div>}
 	</div>
+}
+
+function safeSupports(section: BasdrawPropertySection, shape: TLShape) {
+	try { return section.supports(shape) }
+	catch (error) { console.error(`[basdraw] Property section ${section.id} failed to check support.`, error); return false }
 }

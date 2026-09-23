@@ -32,7 +32,7 @@ export const LabelActionUtil = registerActionUtil(
 		override sanitizeAction(action: Streaming<LabelAction>, helpers: AgentHelpers) {
 			if (!action.complete) return action
 
-			const shapeId = helpers.ensureShapeIdExists(action.shapeId)
+			const shapeId = helpers.ensureShapeIdIsEditable(action.shapeId)
 			if (!shapeId) {
 				return null
 			}
